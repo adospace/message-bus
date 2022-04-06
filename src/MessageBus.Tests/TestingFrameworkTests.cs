@@ -20,16 +20,20 @@ namespace MessageBus.Tests
         {
             string appId = Guid.NewGuid().ToString();
             using var clientHost = Host.CreateDefaultBuilder()
-                .AddMessageBus()
-                .UseRabbitMQ(conf => conf.ApplicationId = appId)
-                .UseJsonSerializer()
+                .AddMessageBus(cfg =>
+                {
+                    cfg.UseRabbitMQ(conf => conf.ApplicationId = appId);
+                    cfg.UseJsonSerializer();
+                })
                 .Build();
 
             using var consumerHost = Host.CreateDefaultBuilder()
-                .AddMessageBus()
-                .UseRabbitMQ(conf => conf.ApplicationId = appId)
-                .UseJsonSerializer()
-                .AddHandler<SampleConsumer, SampleModel, SampleModelReply>()
+                .AddMessageBus(cfg =>
+                {
+                    cfg.UseRabbitMQ(conf => conf.ApplicationId = appId);
+                    cfg.UseJsonSerializer();
+                    cfg.AddHandler<SampleConsumer, SampleModel, SampleModelReply>();
+                })
                 .Build();
 
             await clientHost.StartAsync();
@@ -84,26 +88,32 @@ namespace MessageBus.Tests
         public async Task PublishEventMessageWithMultipleConsumers()
         {
             using var clientHost = Host.CreateDefaultBuilder()
-                .AddMessageBus()
-                .UseRabbitMQ()
-                .UseJsonSerializer()
+                .AddMessageBus(cfg =>
+                {
+                    cfg.UseRabbitMQ();
+                    cfg.UseJsonSerializer();
+                })
                 .Build();
 
             var consumer1 = new SampleConsumer();
             using var consumerHost1 = Host.CreateDefaultBuilder()
-                .AddMessageBus()
-                .UseRabbitMQ()
-                .UseJsonSerializer()
-                .AddEventHandler<SampleConsumer, SampleModelPublished>(serviceLifetime: ServiceLifetime.Singleton)
+                .AddMessageBus(cfg =>
+                {
+                    cfg.UseRabbitMQ();
+                    cfg.UseJsonSerializer();
+                    cfg.AddEventHandler<SampleConsumer, SampleModelPublished>(serviceLifetime: ServiceLifetime.Singleton);
+                })
                 .ConfigureServices(services => services.AddSingleton<IHandler<SampleModelPublished>>(consumer1))
                 .Build();
 
             var consumer2 = new SampleConsumer();
             using var consumerHost2 = Host.CreateDefaultBuilder()
-                .AddMessageBus()
-                .UseRabbitMQ()
-                .UseJsonSerializer()
-                .AddEventHandler<SampleConsumer, SampleModelPublished>(serviceLifetime: ServiceLifetime.Singleton)
+                .AddMessageBus(cfg =>
+                {
+                    cfg.UseRabbitMQ();
+                    cfg.UseJsonSerializer();
+                    cfg.AddEventHandler<SampleConsumer, SampleModelPublished>(serviceLifetime: ServiceLifetime.Singleton);
+                })
                 .ConfigureServices(services => services.AddSingleton<IHandler<SampleModelPublished>>(consumer2))
                 .Build();
 
@@ -200,16 +210,20 @@ namespace MessageBus.Tests
         public async Task SendAndConsumerThrowsException()
         {
             using var clientHost = Host.CreateDefaultBuilder()
-                .AddMessageBus()
-                .UseRabbitMQ()
-                .UseJsonSerializer()
+                .AddMessageBus(cfg =>
+                {
+                    cfg.UseRabbitMQ();
+                    cfg.UseJsonSerializer();
+                })
                 .Build();
 
             using var consumerHost = Host.CreateDefaultBuilder()
-                .AddMessageBus()
-                .UseRabbitMQ()
-                .UseJsonSerializer()
-                .AddHandler<SampleConsumer, SampleModelThatRaisesException>()
+                .AddMessageBus(cfg =>
+                {
+                    cfg.UseRabbitMQ();
+                    cfg.UseJsonSerializer();
+                    cfg.AddHandler<SampleConsumer, SampleModelThatRaisesException>();
+                })
                 .Build();
 
             await clientHost.StartAsync();
@@ -223,16 +237,20 @@ namespace MessageBus.Tests
         public async Task SendAndConsumerIsUnableToDeserializeInputModel()
         {
             using var clientHost = Host.CreateDefaultBuilder()
-                .AddMessageBus()
-                .UseRabbitMQ()
-                .UseJsonSerializer()
+                .AddMessageBus(cfg =>
+                {
+                    cfg.UseRabbitMQ();
+                    cfg.UseJsonSerializer();
+                })
                 .Build();
 
             using var consumerHost = Host.CreateDefaultBuilder()
-                .AddMessageBus()
-                .UseRabbitMQ()
-                .UseJsonSerializer()
-                .AddHandler<SampleConsumer, SampleModelDoNotDeserialize>()
+                .AddMessageBus(cfg =>
+                {
+                    cfg.UseRabbitMQ();
+                    cfg.UseJsonSerializer();
+                    cfg.AddHandler<SampleConsumer, SampleModelDoNotDeserialize>();
+                })                
                 .Build();
 
             await clientHost.StartAsync();

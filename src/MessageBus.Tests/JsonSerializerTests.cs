@@ -45,9 +45,9 @@ namespace MessageBus.Tests
         public void TestJsonSettings()
         {
             var host = Host.CreateDefaultBuilder()
-                .UseJsonSerializer()
-                .ConfigureJsonSerializer(cfg => cfg.Converters.Add(new DateTimeOffsetJsonConverter()))
-                .ConfigureJsonSerializer(cfg => cfg.WriteIndented = true)
+                .AddMessageBus(config =>  config.UseJsonSerializer()
+                    .ConfigureJsonSerializer(cfg => cfg.Converters.Add(new DateTimeOffsetJsonConverter()))
+                    .ConfigureJsonSerializer(cfg => cfg.WriteIndented = true))
                 .Build();
 
             var serializer = host.Services.GetRequiredService<IMessageSerializerFactory>().CreateMessageSerializer();

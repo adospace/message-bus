@@ -1,5 +1,6 @@
 ﻿using MessageBus.Implementation;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -7,91 +8,114 @@ namespace MessageBus
 {
     public static class ServiceCollectionExtensions
     {
-        public static IServiceCollection AddMessageBus(this IServiceCollection serviceCollection)
+        private class MessageBusConfigurator : IMessageBusConfigurator
         {
-            //serviceCollection.AddSingleton(sp => new Bus(sp, options));
-            //serviceCollection.AddSingleton<IBus>(sp => sp.GetRequiredService<Bus>());
-            //serviceCollection.AddSingleton<IMessageSink>(sp => sp.GetRequiredService<Bus>());
-            //serviceCollection.AddSingleton<IMessageSource>(sp => sp.GetRequiredService<Bus>());
-            //serviceCollection.AddSingleton<IBusClient>(sp => sp.GetRequiredService<Bus>());
+            public MessageBusConfigurator(IServiceCollection services)
+            {
+                Services = services;
+            }
+
+            public IServiceCollection Services { get; }
+        }
+
+        public static IServiceCollection AddMessageBus(this IServiceCollection serviceCollection, Action<IMessageBusConfigurator> configuratorAction)
+        {
+            var configurator = new MessageBusConfigurator(serviceCollection);
+
+            configuratorAction(configurator);
+
             serviceCollection.AddMessageBusBackgroundService();
 
             return serviceCollection;
         }
 
-        public static IHostBuilder AddMessageBus(this IHostBuilder hostBuilder)
+        public static IHostBuilder AddMessageBus(this IHostBuilder hostBuilder, Action<IMessageBusConfigurator> configuratorAction)
         {
-            hostBuilder.ConfigureServices((_, services) => services.AddMessageBus());
+            hostBuilder.ConfigureServices((_, services) => services.AddMessageBus(configuratorAction));
             return hostBuilder;
         }
 
-        public static IServiceCollection AddMessageBusBackgroundService(this IServiceCollection serviceCollection)
+        public static IServiceCollection ConfigureMessageBus(this IServiceCollection serviceCollection, Action<IMessageBusConfigurator> configuratorAction)
         {
-            serviceCollection.AddHostedService<Implementation.BusService>();
-            //serviceCollection.AddSingleton<Messages.IMessageFactory, Messages.Implementation.MessageFactory>();
+            var configurator = new MessageBusConfigurator(serviceCollection);
+
+            configuratorAction(configurator);
 
             return serviceCollection;
         }
 
-        public static IHostBuilder AddMessageBusBackgroundService(this IHostBuilder hostBuilder)
+        public static IHostBuilder ConfigureMessageBus(this IHostBuilder hostBuilder, Action<IMessageBusConfigurator> configuratorAction)
         {
-            hostBuilder.ConfigureServices((ctx, services) => services.AddMessageBusBackgroundService());
+            hostBuilder.ConfigureServices((_, services) => services.AddMessageBus(configuratorAction));
             return hostBuilder;
         }
 
-        public static IServiceCollection AddHandler<TConsumer, T>(this IServiceCollection services, ServiceLifetime serviceLifetime = ServiceLifetime.Scoped) where T : class where TConsumer : class, IHandler<T>, new()
+        private static IServiceCollection AddMessageBusBackgroundService(this IServiceCollection serviceCollection)
         {
-            services.Add(new ServiceDescriptor(typeof(IHandler<T>), typeof(TConsumer), serviceLifetime));
-            services.AddSingleton<IHandlerConsumer>(sp => new HandlerConsumer<T>(
+            serviceCollection.AddHostedService<Implementation.BusService>();
+
+            return serviceCollection;
+        }
+
+        //public static IHostBuilder AddMessageBusBackgroundService(this IHostBuilder hostBuilder)
+        //{
+        //    hostBuilder.ConfigureServices((ctx, services) => services.AddMessageBusBackgroundService());
+        //    return hostBuilder;
+        //}
+
+        public static IMessageBusConfigurator AddHandler<TConsumer, T>(this IMessageBusConfigurator messageBusConfigurator, ServiceLifetime serviceLifetime = ServiceLifetime.Scoped) where T : class where TConsumer : class, IHandler<T>, new()
+        {
+            messageBusConfigurator.Services.TryAdd(new ServiceDescriptor(typeof(IHandler<T>), typeof(TConsumer), serviceLifetime));
+            messageBusConfigurator.Services.TryAddSingleton<IHandlerConsumer>(sp => new HandlerConsumer<T>(
                 sp,
                 sp.GetRequiredService<IMessageSerializerFactory>(),
                 sp.GetRequiredService<ILogger<HandlerConsumer<T>>>(),
                 isEventHandler: false,
                 serviceLifetime: serviceLifetime));
 
-            return services;
+            return messageBusConfigurator;
         }
 
-        public static IHostBuilder AddHandler<TConsumer, T>(this IHostBuilder hostBuilder, ServiceLifetime serviceLifetime = ServiceLifetime.Scoped) where T : class where TConsumer : class, IHandler<T>, new()
+        //public static IHostBuilder AddHandler<TConsumer, T>(this IHostBuilder hostBuilder, ServiceLifetime serviceLifetime = ServiceLifetime.Scoped) where T : class where TConsumer : class, IHandler<T>, new()
+        //{
+        //    hostBuilder.ConfigureServices((ctx, services) => services.AddHandler<TConsumer, T>(serviceLifetime));
+        //    return hostBuilder;
+        //}
+        public static IMessageBusConfigurator AddEventHandler<TConsumer, T>(this IMessageBusConfigurator messageBusConfigurator, ServiceLifetime serviceLifetime = ServiceLifetime.Scoped) where T : class where TConsumer : class, IHandler<T>, new()
         {
-            hostBuilder.ConfigureServices((ctx, services) => services.AddHandler<TConsumer, T>(serviceLifetime));
-            return hostBuilder;
-        }
-        public static IServiceCollection AddEventHandler<TConsumer, T>(this IServiceCollection services, ServiceLifetime serviceLifetime = ServiceLifetime.Scoped) where T : class where TConsumer : class, IHandler<T>, new()
-        {
-            services.Add(new ServiceDescriptor(typeof(IHandler<T>), typeof(TConsumer), serviceLifetime));
-            services.AddSingleton<IHandlerConsumer>(sp => new HandlerConsumer<T>(
+            messageBusConfigurator.Services.TryAdd(new ServiceDescriptor(typeof(IHandler<T>), typeof(TConsumer), serviceLifetime));
+            messageBusConfigurator.Services.TryAddSingleton<IHandlerConsumer>(sp => new HandlerConsumer<T>(
                 sp,
                 sp.GetRequiredService<IMessageSerializerFactory>(),
                 sp.GetRequiredService<ILogger<HandlerConsumer<T>>>(),
                 isEventHandler: true,
                 serviceLifetime: serviceLifetime));
 
-            return services;
+            return messageBusConfigurator;
         }
 
-        public static IHostBuilder AddEventHandler<TConsumer, T>(this IHostBuilder hostBuilder, ServiceLifetime serviceLifetime = ServiceLifetime.Scoped) where T : class where TConsumer : class, IHandler<T>, new()
-        {
-            hostBuilder.ConfigureServices((ctx, services) => services.AddEventHandler<TConsumer, T>(serviceLifetime));
-            return hostBuilder;
-        }
+        //public static IHostBuilder AddEventHandler<TConsumer, T>(this IHostBuilder hostBuilder, ServiceLifetime serviceLifetime = ServiceLifetime.Scoped) where T : class where TConsumer : class, IHandler<T>, new()
+        //{
+        //    hostBuilder.ConfigureServices((ctx, services) => services.AddEventHandler<TConsumer, T>(serviceLifetime));
+        //    return hostBuilder;
+        //}
 
-        public static IServiceCollection AddHandler<TConsumer, T, TReply>(this IServiceCollection services, ServiceLifetime serviceLifetime = ServiceLifetime.Scoped) where T : class where TConsumer : class, IHandler<T, TReply>, new()
+        public static IMessageBusConfigurator AddHandler<TConsumer, T, TReply>(this IMessageBusConfigurator messageBusConfigurator, ServiceLifetime serviceLifetime = ServiceLifetime.Scoped) where T : class where TConsumer : class, IHandler<T, TReply>, new()
         {
-            services.Add(new ServiceDescriptor(typeof(IHandler<T, TReply>), typeof(TConsumer), serviceLifetime));
-            services.AddSingleton<IHandlerConsumer>(sp => new HandlerConsumer<T, TReply>(
+            messageBusConfigurator.Services.TryAdd(new ServiceDescriptor(typeof(IHandler<T, TReply>), typeof(TConsumer), serviceLifetime));
+            messageBusConfigurator.Services.TryAddSingleton<IHandlerConsumer>(sp => new HandlerConsumer<T, TReply>(
                 sp,
                 sp.GetRequiredService<IMessageSerializerFactory>(),
                 sp.GetRequiredService<ILogger<HandlerConsumer<T, TReply>>>(),
                 serviceLifetime: serviceLifetime));
-            return services;
+            return messageBusConfigurator;
         }
 
-        public static IHostBuilder AddHandler<TConsumer, T, TReply>(this IHostBuilder hostBuilder, ServiceLifetime serviceLifetime = ServiceLifetime.Scoped) where T : class where TConsumer : class, IHandler<T, TReply>, new()
-        {
-            hostBuilder.ConfigureServices((ctx, services) => services.AddHandler<TConsumer, T, TReply>(serviceLifetime));
-            return hostBuilder;
-        }
+        //public static IHostBuilder AddHandler<TConsumer, T, TReply>(this IHostBuilder hostBuilder, ServiceLifetime serviceLifetime = ServiceLifetime.Scoped) where T : class where TConsumer : class, IHandler<T, TReply>, new()
+        //{
+        //    hostBuilder.ConfigureServices((ctx, services) => services.AddHandler<TConsumer, T, TReply>(serviceLifetime));
+        //    return hostBuilder;
+        //}
 
 
         //private static readonly Type MessageContextType = typeof(MessageContext<>);

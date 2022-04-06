@@ -9,6 +9,11 @@ namespace MessageBus.RabbitMQ;
 public class RabbitMQBusOptions : IBusOptions
 {
     /// <summary>
+    /// RabbitMQ connection Uri
+    /// </summary>
+    public Uri Uri { get; set; } = new Uri("ampq://localhost");
+
+    /// <summary>
     /// RabbitMQ host name
     /// </summary>
     public string HostName { get; set; } = "localhost";
