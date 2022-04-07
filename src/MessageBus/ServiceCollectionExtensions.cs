@@ -63,7 +63,7 @@ namespace MessageBus
         //    return hostBuilder;
         //}
 
-        public static IMessageBusConfigurator AddHandler<TConsumer, T>(this IMessageBusConfigurator messageBusConfigurator, ServiceLifetime serviceLifetime = ServiceLifetime.Scoped) where T : class where TConsumer : class, IHandler<T>, new()
+        public static IMessageBusConfigurator AddHandler<TConsumer, T>(this IMessageBusConfigurator messageBusConfigurator, ServiceLifetime serviceLifetime = ServiceLifetime.Scoped) where T : class where TConsumer : class, IHandler<T>
         {
             messageBusConfigurator.Services.TryAdd(new ServiceDescriptor(typeof(IHandler<T>), typeof(TConsumer), serviceLifetime));
             messageBusConfigurator.Services.TryAddSingleton<IHandlerConsumer>(sp => new HandlerConsumer<T>(
@@ -81,7 +81,7 @@ namespace MessageBus
         //    hostBuilder.ConfigureServices((ctx, services) => services.AddHandler<TConsumer, T>(serviceLifetime));
         //    return hostBuilder;
         //}
-        public static IMessageBusConfigurator AddEventHandler<TConsumer, T>(this IMessageBusConfigurator messageBusConfigurator, ServiceLifetime serviceLifetime = ServiceLifetime.Scoped) where T : class where TConsumer : class, IHandler<T>, new()
+        public static IMessageBusConfigurator AddEventHandler<TConsumer, T>(this IMessageBusConfigurator messageBusConfigurator, ServiceLifetime serviceLifetime = ServiceLifetime.Scoped) where T : class where TConsumer : class, IHandler<T>
         {
             messageBusConfigurator.Services.TryAdd(new ServiceDescriptor(typeof(IHandler<T>), typeof(TConsumer), serviceLifetime));
             messageBusConfigurator.Services.TryAddSingleton<IHandlerConsumer>(sp => new HandlerConsumer<T>(
@@ -100,7 +100,7 @@ namespace MessageBus
         //    return hostBuilder;
         //}
 
-        public static IMessageBusConfigurator AddHandler<TConsumer, T, TReply>(this IMessageBusConfigurator messageBusConfigurator, ServiceLifetime serviceLifetime = ServiceLifetime.Scoped) where T : class where TConsumer : class, IHandler<T, TReply>, new()
+        public static IMessageBusConfigurator AddHandler<TConsumer, T, TReply>(this IMessageBusConfigurator messageBusConfigurator, ServiceLifetime serviceLifetime = ServiceLifetime.Scoped) where T : class where TConsumer : class, IHandler<T, TReply>
         {
             messageBusConfigurator.Services.TryAdd(new ServiceDescriptor(typeof(IHandler<T, TReply>), typeof(TConsumer), serviceLifetime));
             messageBusConfigurator.Services.TryAddSingleton<IHandlerConsumer>(sp => new HandlerConsumer<T, TReply>(
