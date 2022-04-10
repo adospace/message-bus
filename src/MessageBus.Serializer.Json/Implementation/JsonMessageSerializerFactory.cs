@@ -18,8 +18,14 @@ internal class JsonMessageSerializerFactory : IMessageSerializerFactory
         if (_configurators.Any())
         {
             options = new();
+            HashSet<string> alreadyConfigured = new();
             foreach (var configurator in _configurators)
             {
+                if (configurator.OptionsSelectorKey != null &&
+                    alreadyConfigured.Contains(configurator.OptionsSelectorKey))
+                {
+                    continue;
+                }
                 configurator.ConfiguratorAction(options);
             }
         }

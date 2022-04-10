@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Threading.Tasks.Dataflow;
 
 namespace MessageBus.RabbitMQ.Implementation;
 
@@ -16,16 +17,123 @@ internal class Bus : IBus, IBusClient
 {
     private class RpcCall
     {
-        public RpcCall()
+        private readonly Bus _bus;
+        private readonly Type? _typeofReply;
+        //private readonly IModel _channel;
+        private readonly IMessageSerializer _messageSerializer;
+        //private readonly RabbitMQBusOptions _options;
+        //private readonly string _replyQueueName;
+
+        public RpcCall(Bus bus, Type? typeofReply = null)
         {
-            WaitReplyEvent = new AsyncAutoResetEvent();
+            _bus = bus;
+            _typeofReply = typeofReply;
+            //_channel = bus._replyConsumerChannel ?? throw new InvalidOperationException();
+            _messageSerializer = bus._messageSerializer;
+            //_options = bus._options;
+            //_replyQueueName = bus._replyQueueName ?? throw new InvalidOperationException();
+
+            //_replyQueueName = _channel.QueueDeclare(arguments: _bus.CreateQueuePropertiesFromOptions()).QueueName;
+            //_replyConsumer = new AsyncEventingBasicConsumer(_channel);
+
+            //_replyConsumer.Received += (s, e) => OnReceivedReply(e);
+
+            //_channel.BasicConsume(
+            //    queue: _replyQueueName,
+            //    consumer: _replyConsumer,
+            //    autoAck: true);
+
+            CorrelationId = Guid.NewGuid().ToString();
         }
 
-        public AsyncAutoResetEvent WaitReplyEvent { get; }
+        public AsyncAutoResetEvent WaitReplyEvent { get; } = new AsyncAutoResetEvent();
 
-        public ReadOnlyMemory<byte> ReplyMessage { get; set; }
+        public object? ReplyMessage { get; private set; }
 
-        public bool IsException { get; set; }
+        public string? RemoteExceptionStackTrace { get; private set; }
+
+        public bool IsException { get; private set; }
+
+        public Exception? ModelDeserializationException { get; private set; }
+
+        public string CorrelationId { get; }
+
+        public void Execute<T>(byte[] modelSerialized)
+        {
+            using var channelFromPool = _bus._channelPool.Get();
+            var props = channelFromPool.Value.CreateBasicProperties();
+            props.CorrelationId = CorrelationId;
+            props.ReplyTo = _bus._replyQueueName;
+
+            var key = typeof(T).FullName ?? throw new InvalidOperationException();
+
+            channelFromPool.Value.BasicPublish(
+                exchange: string.Empty,
+                routingKey: _bus._options.ApplicationId == null ? key : $"{_bus._options.ApplicationId}_{key}",
+                basicProperties: props,
+                body: modelSerialized);
+        }
+
+        public Task OnReceivedReply(BasicDeliverEventArgs e)
+        {
+            if (e.BasicProperties.IsHeadersPresent() &&
+                e.BasicProperties.Headers.TryGetValue("IsException", out var _))
+            {
+                IsException = true;
+                RemoteExceptionStackTrace = Encoding.UTF8.GetString(e.Body.ToArray());
+            }
+            else
+            {
+                if (_typeofReply != null)
+                {
+                    try
+                    {
+                        ReplyMessage = _messageSerializer.Deserialize(
+                            e.Body,
+                            _typeofReply);
+                    }
+                    catch (Exception ex)
+                    {
+                        ModelDeserializationException = ex;
+                    }
+                }
+            }
+
+            WaitReplyEvent.Set();
+
+            return Task.CompletedTask;
+        }
+    }
+
+    private class ReceivedCall
+    {
+        public IBasicProperties BasicProperties { get; }
+
+        public object Message { get; }
+
+        public string ConsumerTag { get; }
+
+        public ulong DeliveryTag { get; }
+
+        public string Exchange { get; }
+
+        public bool Redelivered { get; }
+
+        public string RoutingKey { get; }
+
+        public IHandlerConsumer HandlerConsumer { get; }
+
+        public ReceivedCall(IHandlerConsumer handlerConsumer, BasicDeliverEventArgs args, object message)
+        {
+            HandlerConsumer = handlerConsumer;
+            BasicProperties = args.BasicProperties;
+            Message = message;
+            ConsumerTag = args.ConsumerTag;
+            DeliveryTag = args.DeliveryTag;
+            Exchange = args.Exchange;
+            Redelivered = args.Redelivered;
+            RoutingKey = args.RoutingKey;
+        }
     }
 
     private readonly RabbitMQBusOptions _options;
@@ -34,12 +142,16 @@ internal class Bus : IBus, IBusClient
     private readonly ConnectionFactory _factory;
     private readonly IMessageSerializer _messageSerializer;
     private IConnection? _connection;
-    private IModel? _channel;
+    private IModel? _replyConsumerChannel;
     private readonly ConcurrentBag<string> _consumers = new();
-    private string? _replyQueueName;
     private readonly ConcurrentDictionary<string, RpcCall> _waitingCalls = new();
+    private readonly ObjectPool<IModel> _channelPool;
 
-    private AsyncEventingBasicConsumer? _replyConsumer;
+    private EventingBasicConsumer? _replyConsumer;
+    private string? _replyQueueName;
+
+    private readonly BufferBlock<ReceivedCall> _incomingCalls;
+
 
     public Bus(
         RabbitMQBusOptions options, 
@@ -53,11 +165,25 @@ internal class Bus : IBus, IBusClient
         _factory = new ConnectionFactory()
         {
             HostName = options.HostName,
-            DispatchConsumersAsync = true,
-            ConsumerDispatchConcurrency = options.MaxDegreeOfParallelism,
+            Uri = options.Uri,
             RequestedHeartbeat = TimeSpan.FromSeconds(30)
         };
         _messageSerializer = messageSerializerFactory.CreateMessageSerializer();
+        _incomingCalls = new BufferBlock<ReceivedCall>(new DataflowBlockOptions
+        { 
+        
+        });
+        _channelPool = new ObjectPool<IModel>(() => 
+        {
+            if (_connection == null)
+            {
+                throw new InvalidOperationException();
+            }
+
+            var newChannel = _connection.CreateModel();
+            newChannel.BasicQos(0, 1, false);
+            return newChannel;
+        });
     }
 
     private Dictionary<string, object> CreateQueuePropertiesFromOptions()
@@ -81,12 +207,13 @@ internal class Bus : IBus, IBusClient
             throw new InvalidCastException();
         }
 
+        _logger.LogDebug("Connecting to RabbitMQ: {Uri}", _factory.Uri);
         _connection = _factory.CreateConnection();
-        _channel = _connection.CreateModel();
-        _channel.BasicQos(0, 1, false);
+        _replyConsumerChannel = _connection.CreateModel();
+        _replyConsumerChannel.BasicQos(0, 1, false);
 
-        _replyQueueName = _channel.QueueDeclare(arguments: CreateQueuePropertiesFromOptions()).QueueName;
-        _replyConsumer = new AsyncEventingBasicConsumer(_channel);
+        _replyQueueName = _replyConsumerChannel.QueueDeclare(arguments: CreateQueuePropertiesFromOptions()).QueueName;
+        _replyConsumer = new EventingBasicConsumer(_replyConsumerChannel);
 
         foreach (var handlerConsumer in _handlerConsumers)
         {
@@ -97,48 +224,64 @@ internal class Bus : IBus, IBusClient
                     :
                     RegisterConsumerToQueue(handlerConsumer.Key);
 
-                consumer.Received += (s, ea) => ReceivedFromConsumerWithoutReply(handlerConsumerWithoutReply, ea);
+                consumer.Received += (s, ea) => OnReceivedMessageFromIncomingCall(handlerConsumerWithoutReply, ea);
             }
             else if (handlerConsumer is IHandlerConsumerWithReply handlerConsumerWithReply)
             {
                 var consumer = RegisterConsumerToQueue(handlerConsumer.Key);
 
-                consumer.Received += (s, ea) => ReceivedFromConsumerThatRequireReply(handlerConsumerWithReply, ea);
+                consumer.Received += (s, ea) => OnReceivedMessageFromIncomingCall(handlerConsumerWithReply, ea);
             }
         }
 
         _replyConsumer.Received += OnReplyMessageReceived;
 
-        _channel.BasicConsume(
+        _replyConsumerChannel.BasicConsume(
             queue: _replyQueueName,
             consumer: _replyConsumer,
-            autoAck: false);
+            autoAck: true);
 
         try
         {
-            await Task.Delay(Timeout.Infinite, cancellationToken);
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                var incomingCall = await _incomingCalls.ReceiveAsync(cancellationToken);
+                await OnMessageReceivedFromClient(incomingCall).ConfigureAwait(false);
+            }
         }
         catch (OperationCanceledException)
         {
 
         }
+        finally
+        {
+            _incomingCalls.Complete();
+        }
     }
 
-    private Task OnReplyMessageReceived(object? sender, BasicDeliverEventArgs e)
+    private void OnReceivedMessageFromIncomingCall(IHandlerConsumer handlerConsumer, BasicDeliverEventArgs ea)
+    {
+        object message;
+        try
+        {
+            message = _messageSerializer.Deserialize(ea.Body, handlerConsumer.ModelType);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unable to deserialize model of type {ModelType}", handlerConsumer.ModelType);
+
+            throw new MessageBoxCallException($"Unable to deserialize model of type {handlerConsumer.ModelType}:{Environment.NewLine}{ex.InnerException}");
+        }
+
+        _incomingCalls.Post(new ReceivedCall(handlerConsumer, ea, message));
+    }
+
+    private void OnReplyMessageReceived(object? sender, BasicDeliverEventArgs e)
     {
         if (_waitingCalls.TryGetValue(e.BasicProperties.CorrelationId, out var replyHandler))
         {
-            if (e.BasicProperties.IsHeadersPresent() &&
-                e.BasicProperties.Headers.TryGetValue("IsException", out var _))
-            {
-                replyHandler.IsException = true;
-            }
-            
-            replyHandler.ReplyMessage = e.Body;
-            replyHandler.WaitReplyEvent.Set();
+            replyHandler.OnReceivedReply(e);
         }
-
-        return Task.CompletedTask;
     }
 
     public Task Stop(CancellationToken cancellationToken = default)
@@ -150,18 +293,18 @@ internal class Bus : IBus, IBusClient
             _replyQueueName = null;
         }
 
-        _channel?.Dispose();
+        _replyConsumerChannel?.Dispose();
         _connection?.Dispose();
 
-        _channel = null;
+        _replyConsumerChannel = null;
         _connection = null;
 
         return Task.CompletedTask;
     }
 
-    private AsyncEventingBasicConsumer RegisterConsumerToQueue(string key)
+    private EventingBasicConsumer RegisterConsumerToQueue(string key)
     {
-        if (_connection == null || _channel == null)
+        if (_connection == null || _replyConsumerChannel == null)
         {
             throw new InvalidCastException("Bus not started");
         }
@@ -173,7 +316,9 @@ internal class Bus : IBus, IBusClient
 
         try
         {
-            _channel.QueueDeclare(
+            _logger.LogDebug("Registering consumer queue '{ConsumerKey}'", key);
+            
+            _replyConsumerChannel.QueueDeclare(
                 queue: _options.ApplicationId == null ? key : $"{_options.ApplicationId}_{key}",
                 durable: false,
                 exclusive: false,
@@ -186,21 +331,21 @@ internal class Bus : IBus, IBusClient
             throw new InvalidOperationException($"Unable to create queue '{key}': if any options property (like QueueExpiration or DefaultTimeToLive) is changed ensure that queue wasn't already created with a different value for that properties.", ex);
         }
 
-        var consumer = new AsyncEventingBasicConsumer(_channel);
+        var consumer = new EventingBasicConsumer(_replyConsumerChannel);
 
-        _channel.BasicConsume(
+        _replyConsumerChannel.BasicConsume(
             queue: _options.ApplicationId == null ? key : $"{_options.ApplicationId}_{key}", 
             consumer: consumer,
-            autoAck: false);
+            autoAck: true);
 
         _consumers.Add(key);
 
         return consumer;
     }
 
-    private AsyncEventingBasicConsumer RegisterConsumerToExchange(string key)
+    private EventingBasicConsumer RegisterConsumerToExchange(string key)
     {
-        if (_connection == null || _channel == null)
+        if (_connection == null || _replyConsumerChannel == null)
         {
             throw new InvalidCastException("Bus not started");
         }
@@ -210,14 +355,16 @@ internal class Bus : IBus, IBusClient
             throw new InvalidOperationException($"Consumer with key '{key}' already registered");
         }
 
-        _channel.ExchangeDeclare(
+        _logger.LogDebug("Registering consumer exchange '{ConsumerKey}'", key);
+        
+        _replyConsumerChannel.ExchangeDeclare(
             exchange: _options.ApplicationId == null ? key : $"{_options.ApplicationId}_{key}", 
             type: ExchangeType.Fanout);
 
         string queueName;
         try
         {
-            queueName = _channel.QueueDeclare(
+            queueName = _replyConsumerChannel.QueueDeclare(
                 arguments: CreateQueuePropertiesFromOptions()).QueueName;
         }
         catch (OperationInterruptedException ex)
@@ -225,62 +372,85 @@ internal class Bus : IBus, IBusClient
             throw new InvalidOperationException($"Unable to create queue '{key}': if any options property (like QueueExpiration or DefaultTimeToLive) is changed ensure that queue wasn't already created with a different value for that properties.", ex);
         }
 
-        _channel.QueueBind(queue: queueName,
+        _replyConsumerChannel.QueueBind(queue: queueName,
                             exchange: _options.ApplicationId == null ? key : $"{_options.ApplicationId}_{key}",
                             routingKey: string.Empty);
 
-        var consumer = new AsyncEventingBasicConsumer(_channel);
+        var consumer = new EventingBasicConsumer(_replyConsumerChannel);
 
-        _channel.BasicConsume(
+        _replyConsumerChannel.BasicConsume(
             queue: queueName,
             consumer: consumer,
-            autoAck: false);
+            autoAck: true);
 
         _consumers.Add(key);
 
         return consumer;
     }
 
-
-    private async Task ReceivedFromConsumerWithoutReply(IHandlerConsumerWithoutReply handlerConsumer, BasicDeliverEventArgs ea)
+    private async Task OnMessageReceivedFromClient(ReceivedCall receivedCall)
     {
+        if (receivedCall.HandlerConsumer is IHandlerConsumerWithoutReply)
+        {
+            await OnMessageReceivedFromClientWithoutReply(receivedCall);
+        }
+        else
+        {
+            await OnMessageReceivedFromClientThatRequireReply(receivedCall);
+        }
+    }
+
+    private async Task OnMessageReceivedFromClientWithoutReply(ReceivedCall receivedCall)
+    {
+        using var channelForReply = _channelPool.Get();
+        var props = receivedCall.BasicProperties;
         try
         {
-            await handlerConsumer.OnHandle(ea.Body);
+            _logger.LogDebug("Calling handler for message '{ConsumerKey}' (CorrelationId:{CorrelationId})", receivedCall.HandlerConsumer.Key, props.CorrelationId);
+
+            await ((IHandlerConsumerWithoutReply)receivedCall.HandlerConsumer).OnHandle(receivedCall.Message);
         }
         catch (MessageBoxCallException ex)
         {
-            HandleException(ea, ex);
+            _logger.LogError(ex, "Exception raised when calling handler for model '{ConsumerKey}' (CorrelationId:{CorrelationId})", receivedCall.HandlerConsumer.Key, props.CorrelationId);
+
+            HandleException(channelForReply.Value, receivedCall, ex);
         }
 
-        if (_connection == null || _channel == null)
+        if (_connection == null)
         {
             return;
         }
 
-        var props = ea.BasicProperties;
         if (props.ReplyTo != null && props.CorrelationId != null)
         {
-            var replyProps = _channel.CreateBasicProperties();
+            var replyProps = channelForReply.Value.CreateBasicProperties();
             replyProps.CorrelationId = props.CorrelationId;
+            
+            _logger.LogDebug("Reply to message '{ConsumerKey}' (CorrelationId:{CorrelationId})", receivedCall.HandlerConsumer.Key, props.CorrelationId);
 
-            _channel.BasicPublish(
+            channelForReply.Value.BasicPublish(
                 exchange: string.Empty,
                 routingKey: props.ReplyTo,
                 basicProperties: replyProps,
                 body: Array.Empty<byte>());
         }
 
-        _channel.BasicAck(deliveryTag: ea.DeliveryTag, multiple: false);
+        //channelForReply.Value.BasicAck(deliveryTag: receivedCall.DeliveryTag, multiple: false);
     }
 
-    private async Task ReceivedFromConsumerThatRequireReply(IHandlerConsumerWithReply handlerConsumer, BasicDeliverEventArgs ea)
+    private async Task OnMessageReceivedFromClientThatRequireReply(ReceivedCall receivedCall)
     {
+        using var channelForReply = _channelPool.Get();
+
+        var props = receivedCall.BasicProperties;
         try
         {
-            var reply = await handlerConsumer.OnHandle(ea.Body);
+            _logger.LogDebug("Calling handler for message '{ConsumerKey}' (CorrelationId:{CorrelationId})", receivedCall.HandlerConsumer.Key, props.CorrelationId);
 
-            if (_connection == null || _channel == null)
+            var reply = await ((IHandlerConsumerWithReply)receivedCall.HandlerConsumer).OnHandle(receivedCall.Message);
+
+            if (_connection == null || _replyConsumerChannel == null)
             {
                 return;
             }
@@ -290,11 +460,12 @@ internal class Bus : IBus, IBusClient
                 reply = Array.Empty<byte>();
             }
 
-            var props = ea.BasicProperties;
-            var replyProps = _channel.CreateBasicProperties();
+            var replyProps = channelForReply.Value.CreateBasicProperties();
             replyProps.CorrelationId = props.CorrelationId;
 
-            _channel.BasicPublish(
+            _logger.LogDebug("Reply to message '{ConsumerKey}' (CorrelationId:{CorrelationId})", receivedCall.HandlerConsumer.Key, props.CorrelationId);
+            
+            channelForReply.Value.BasicPublish(
                 exchange: string.Empty,
                 routingKey: props.ReplyTo,
                 basicProperties: replyProps,
@@ -302,38 +473,40 @@ internal class Bus : IBus, IBusClient
         }
         catch (MessageBoxCallException ex)
         {
-            HandleException(ea, ex);
+            _logger.LogError(ex, "Exception raised when calling handler for model '{ConsumerKey}' (CorrelationId:{CorrelationId})", receivedCall.HandlerConsumer.Key, props.CorrelationId);
+
+            HandleException(channelForReply.Value, receivedCall, ex);
         }
 
-        if (_connection == null || _channel == null)
-        {
-            return;
-        }
+        //if (_connection == null || _replyConsumerChannel == null)
+        //{
+        //    return;
+        //}
 
-        _channel.BasicAck(
-            deliveryTag: ea.DeliveryTag,
-            multiple: false);
+        //channelForReply.Value.BasicAck(
+        //    deliveryTag: receivedCall.DeliveryTag,
+        //    multiple: false);
     }
 
-    private void HandleException(BasicDeliverEventArgs ea, MessageBoxCallException ex)
+    private void HandleException(IModel channelForReply, ReceivedCall receivedCall, MessageBoxCallException ex)
     {
-        if (_connection == null || _channel == null)
+        if (_connection == null || _replyConsumerChannel == null)
         {
             return;
         }
 
-        var props = ea.BasicProperties;
+        var props = receivedCall.BasicProperties;
 
         if (props.ReplyTo != null && props.CorrelationId != null)
         {
-            var replyProps = _channel.CreateBasicProperties();
+            var replyProps = channelForReply.CreateBasicProperties();
             replyProps.CorrelationId = props.CorrelationId;
             replyProps.Headers = new Dictionary<string, object>
             {
                 { "IsException", true }
-            };            
+            };
 
-            _channel.BasicPublish(
+            channelForReply.BasicPublish(
                 exchange: string.Empty,
                 routingKey: props.ReplyTo,
                 basicProperties: replyProps,
@@ -343,7 +516,7 @@ internal class Bus : IBus, IBusClient
 
     public Task Publish<T>(T model, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
     {
-        if (_connection == null || _channel == null)
+        if (_connection == null || _replyConsumerChannel == null)
         {
             throw new InvalidCastException("Bus not started");
         }
@@ -360,7 +533,10 @@ internal class Bus : IBus, IBusClient
             throw;
         }
         var key = typeof(T).FullName ?? throw new InvalidOperationException();
-        _channel.BasicPublish(
+
+        using var channelForPublish = _channelPool.Get();
+
+        channelForPublish.Value.BasicPublish(
             exchange: _options.ApplicationId == null ? key : $"{_options.ApplicationId}_{key}",
             routingKey: string.Empty,
             body: modelSerialized);
@@ -370,7 +546,7 @@ internal class Bus : IBus, IBusClient
 
     public async Task Send<T>(T model, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
     {
-        if (_connection == null || _channel == null)
+        if (_connection == null || _replyConsumerChannel == null)
         {
             throw new InvalidCastException("Bus not started");
         }
@@ -387,22 +563,11 @@ internal class Bus : IBus, IBusClient
             throw;
         }
 
-        var props = _channel.CreateBasicProperties();
-        var correlationId = Guid.NewGuid().ToString();
-        props.CorrelationId = correlationId;
-        props.ReplyTo = _replyQueueName;
+        var call = new RpcCall(this);
 
-        var call = new RpcCall();
+        _waitingCalls[call.CorrelationId] = call;
 
-        _waitingCalls[correlationId] = call;
-
-        var key = typeof(T).FullName ?? throw new InvalidOperationException();
-
-        _channel.BasicPublish(
-            exchange: string.Empty,
-            routingKey: _options.ApplicationId == null ? key : $"{_options.ApplicationId}_{key}",
-            basicProperties: props,
-            body: modelSerialized);
+        call.Execute<T>(modelSerialized);
 
         try
         {
@@ -413,19 +578,19 @@ internal class Bus : IBus, IBusClient
         }
         finally
         {
-            _waitingCalls.TryRemove(correlationId, out var _);
+            _waitingCalls.TryRemove(call.CorrelationId, out var _);
         }
 
         if (call.IsException)
         {
-            throw new MessageBoxCallException(Encoding.UTF8.GetString(call.ReplyMessage.ToArray()));
+            throw new MessageBoxCallException(call.RemoteExceptionStackTrace);
         }
 
     }
 
     public async Task<TReply> SendAndGetReply<T, TReply>(T model, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
     {
-        if (_connection == null || _channel == null)
+        if (_connection == null || _replyConsumerChannel == null)
         {
             throw new InvalidCastException("Bus not started");
         }
@@ -442,59 +607,42 @@ internal class Bus : IBus, IBusClient
             throw;
         }
 
-        var props = _channel.CreateBasicProperties();
-        var correlationId = Guid.NewGuid().ToString();
-        props.CorrelationId = correlationId;
-        props.ReplyTo = _replyQueueName;
+        var call = new RpcCall(this, typeof(TReply));
+        
+        _waitingCalls[call.CorrelationId] = call;
 
-        var call = new RpcCall();
-
-        _waitingCalls[correlationId] = call;
-
-        var key = typeof(T).FullName ?? throw new InvalidOperationException();
-
-        _channel.BasicPublish(
-            exchange: string.Empty,
-            routingKey: _options.ApplicationId == null ? key : $"{_options.ApplicationId}_{key}",
-            basicProperties: props,
-            body: modelSerialized);
+        call.Execute<T>(modelSerialized);
 
         try
         {
             if (!await call.WaitReplyEvent.WaitAsync(cancellationToken).CancelAfter(timeout ?? _options.DefaultCallTimeout, cancellationToken: cancellationToken))
             {
-                throw new TimeoutException($"Unable to get a reply to the message '{model.GetType()}' in {timeout ?? _options.DefaultCallTimeout}");
+                throw new TimeoutException($"Unable to get a reply to the message '{model.GetType()}' (CorrelationId: {call.CorrelationId}) in {timeout ?? _options.DefaultCallTimeout}");
             }
         }
         finally
         {
-            _waitingCalls.TryRemove(correlationId, out var _);
+            _waitingCalls.TryRemove(call.CorrelationId, out var _);
         }
 
         if (call.IsException)
         {
-            throw new MessageBoxCallException(Encoding.UTF8.GetString(call.ReplyMessage.ToArray()));
+            throw new MessageBoxCallException(call.RemoteExceptionStackTrace);
         }
 
-        if (call.ReplyMessage.Length == 0)
+        if (call.ModelDeserializationException != null)
+        {
+            _logger.LogError(call.ModelDeserializationException, "Unable to deserialize reply model of type {ModelType}", typeof(TReply));
+            throw call.ModelDeserializationException;
+        }
+
+        if (call.ReplyMessage == null)
         {
             return default!;
         }
 
-        object deserializedReplyModel;
 
-        try
-        {
-            deserializedReplyModel = _messageSerializer.Deserialize(
-                call.ReplyMessage,
-                typeof(TReply));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Unable to deserialize reply model of type {ModelType}", typeof(TReply));
-            throw;
-        }
 
-        return (TReply)deserializedReplyModel;
+        return (TReply)call.ReplyMessage;
     }
 }

@@ -10,18 +10,19 @@ namespace MessageBus
     { 
         string Key { get; }
     
+        Type ModelType { get; }
     }
 
     public interface IHandlerConsumerWithoutReply : IHandlerConsumer
     {
         bool IsEventHandler { get; }
 
-        Task OnHandle(ReadOnlyMemory<byte> messageBytes, CancellationToken cancellationToken = default);
+        Task OnHandle(object message, CancellationToken cancellationToken = default);
     }
 
     public interface IHandlerConsumerWithReply : IHandlerConsumer
     {
 
-        Task<byte[]?> OnHandle(ReadOnlyMemory<byte> messageBytes, CancellationToken cancellationToken = default);
+        Task<byte[]?> OnHandle(object message, CancellationToken cancellationToken = default);
     }
 }

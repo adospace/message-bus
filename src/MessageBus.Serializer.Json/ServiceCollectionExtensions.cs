@@ -17,7 +17,7 @@ public static class ServiceCollectionExtensions
             messageBusConfigurator.Services.AddTransient(_ => new JsonSerializerConfigurator(optionsConfigureAction));
         }
 
-        return messageBusConfigurator;        
+        return messageBusConfigurator;
     }
 
     public static IMessageBusConfigurator ConfigureJsonSerializer(this IMessageBusConfigurator messageBusConfigurator, Action<JsonSerializerOptions> optionsConfigureAction)
@@ -26,4 +26,36 @@ public static class ServiceCollectionExtensions
 
         return messageBusConfigurator;
     }
+
+    public static IMessageBusConfigurator ConfigureJsonSerializer(this IMessageBusConfigurator messageBusConfigurator, string optionsSelectorKey, Action<JsonSerializerOptions> optionsConfigureAction)
+    {
+        if (string.IsNullOrWhiteSpace(optionsSelectorKey))
+        {
+            throw new ArgumentException("OptionsSelectorKey must be not null, empty or whitespace", nameof(optionsSelectorKey));
+        }
+
+        messageBusConfigurator.Services.AddTransient(_ => new JsonSerializerConfigurator(optionsConfigureAction, optionsSelectorKey));
+
+        return messageBusConfigurator;
+    }
+
+    public static IServiceCollection ConfigureMessageBusJsonSerializer(this IServiceCollection services, Action<JsonSerializerOptions> optionsConfigureAction)
+    {
+        services.AddTransient(_ => new JsonSerializerConfigurator(optionsConfigureAction));
+
+        return services;
+    }
+
+    public static IServiceCollection ConfigureMessageBusJsonSerializer(this IServiceCollection services, string optionsSelectorKey, Action<JsonSerializerOptions> optionsConfigureAction)
+    {
+        if (string.IsNullOrWhiteSpace(optionsSelectorKey))
+        {
+            throw new ArgumentException("Must be not null, empty or whitespace", nameof(optionsSelectorKey));
+        }
+
+        services.AddTransient(_ => new JsonSerializerConfigurator(optionsConfigureAction, optionsSelectorKey));
+
+        return services;
+    }
+
 }

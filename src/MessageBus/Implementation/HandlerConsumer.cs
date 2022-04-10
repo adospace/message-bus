@@ -31,23 +31,13 @@ namespace MessageBus.Implementation
 
         public string Key => typeof(T).FullName ?? throw new InvalidOperationException();
 
+        public Type ModelType => typeof(T);
+
         public bool IsEventHandler { get; }
 
-        public async Task OnHandle(ReadOnlyMemory<byte> messageBytes, CancellationToken cancellationToken)
+        public async Task OnHandle(object untypedMessage, CancellationToken cancellationToken)
         {
-            //1. Deserializzo il tipo di input
-            T message;
-            try
-            {
-                message = (T)_messageSerializer.Deserialize(messageBytes, typeof(T));
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Unable to deserialize model of type {ModelType} (IHandler<{T}>)", typeof(T), typeof(T));
-                throw new MessageBoxCallException($"Unable to deserialize model of type {typeof(T)} (IHandler<{typeof(T)}>):{Environment.NewLine}{ex.InnerException}");
-            }
-
-            //2. Eseguo la chiamata all'handler
+            T message = (T)untypedMessage;
             if (_serviceLifetime == ServiceLifetime.Scoped)
             {
                 using var scope = _serviceProvider.CreateScope();
@@ -68,11 +58,14 @@ namespace MessageBus.Implementation
             try
             {
                 await handler.Handle(message, cancellationToken);
+                
                 _logger.LogTrace("Successfully called handler IHandler<{T}>", typeof(T));
             }
             catch (Exception ex)
             {
-                throw new MessageBoxCallException($"Exception raised when calling handler IHandler<{typeof(T)}>:{Environment.NewLine}{ex.InnerException}");
+                _logger.LogError(ex, $"Exception raised when calling handler IHandler<{typeof(T)}>");
+
+                throw new MessageBoxCallException($"Exception raised when calling handler IHandler<{typeof(T)}>:{Environment.NewLine}{ex}");
             }
         }
     }
@@ -98,22 +91,13 @@ namespace MessageBus.Implementation
 
         public string Key => typeof(T).FullName ?? throw new InvalidOperationException();
 
-        public async Task<byte[]?> OnHandle(ReadOnlyMemory<byte> messageBytes, CancellationToken cancellationToken)
+        public Type ModelType => typeof(T);
+
+        public async Task<byte[]?> OnHandle(object untypedMessage, CancellationToken cancellationToken)
         {
-            //1. Deserializzo il tipo di input
-            T message;
-            try
-            {
-                message = (T)_messageSerializer.Deserialize(messageBytes, typeof(T));
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Unable to deserialize model of type {ModelType} (IHandler<{T}, {TReply}>)", typeof(T), typeof(T), typeof(TReply));
-                throw new MessageBoxCallException($"Unable to deserialize model of type {typeof(T)} (IHandler<{typeof(T)}, {typeof(TReply)}>):{Environment.NewLine}{ex.InnerException}");
-            }
+            T message = (T)untypedMessage;
 
-
-            //2. Eseguo la chiamata all'handler
+            //1. Eseguo la chiamata all'handler
             TReply? replyMessage;
 
             if (_serviceLifetime == ServiceLifetime.Scoped)
@@ -130,7 +114,7 @@ namespace MessageBus.Implementation
                 replyMessage = await CallHandler(message, handler, cancellationToken);
             }
 
-            //3. Deserializzo il messaggio di Reply
+            //2. Deserializzo il messaggio di Reply
             if (replyMessage == null)
             {
                 return null;
@@ -156,7 +140,6 @@ namespace MessageBus.Implementation
             }
         }
 
-
         private async Task<TReply?> CallHandler(T message, IHandler<T, TReply> handler, CancellationToken cancellationToken)
         {
             try
@@ -168,7 +151,9 @@ namespace MessageBus.Implementation
             }
             catch (Exception ex)
             {
-                throw new MessageBoxCallException($"Exception raised when calling handler IHandler<{typeof(T)}, {typeof(TReply)}>:{Environment.NewLine}{ex.InnerException}");
+                _logger.LogError(ex, $"Exception raised when calling handler IHandler<{typeof(T)}, {typeof(TReply)}>");
+
+                throw new MessageBoxCallException($"Exception raised when calling handler IHandler<{typeof(T)}, {typeof(TReply)}>:{Environment.NewLine}{ex}");
             }
         }
     }
