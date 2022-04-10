@@ -200,7 +200,7 @@ internal class Bus : IBus, IBusClient
         return args;
     }
 
-    public async Task Run(CancellationToken cancellationToken = default)
+    public Task Start(CancellationToken cancellationToken = default)
     {
         if (_connection != null)
         {
@@ -241,6 +241,16 @@ internal class Bus : IBus, IBusClient
             consumer: _replyConsumer,
             autoAck: true);
 
+        return Task.CompletedTask;
+    }
+
+    public async Task Run(CancellationToken cancellationToken = default)
+    {
+        if (_connection == null || _replyConsumer == null)
+        {
+            throw new InvalidCastException();
+        }
+
         try
         {
             while (!cancellationToken.IsCancellationRequested)
@@ -270,7 +280,12 @@ internal class Bus : IBus, IBusClient
         {
             _logger.LogError(ex, "Unable to deserialize model of type {ModelType}", handlerConsumer.ModelType);
 
-            throw new MessageBoxCallException($"Unable to deserialize model of type {handlerConsumer.ModelType}:{Environment.NewLine}{ex.InnerException}");
+            using var channelForReply = _channelPool.Get();
+            HandleException(
+                channelForReply.Value, 
+                ea.BasicProperties, 
+                new MessageBoxCallException($"Unable to deserialize model of type {handlerConsumer.ModelType}:{Environment.NewLine}{ex.InnerException}"));
+            return;
         }
 
         _incomingCalls.Post(new ReceivedCall(handlerConsumer, ea, message));
@@ -414,7 +429,7 @@ internal class Bus : IBus, IBusClient
         {
             _logger.LogError(ex, "Exception raised when calling handler for model '{ConsumerKey}' (CorrelationId:{CorrelationId})", receivedCall.HandlerConsumer.Key, props.CorrelationId);
 
-            HandleException(channelForReply.Value, receivedCall, ex);
+            HandleException(channelForReply.Value, receivedCall.BasicProperties, ex);
         }
 
         if (_connection == null)
@@ -475,7 +490,7 @@ internal class Bus : IBus, IBusClient
         {
             _logger.LogError(ex, "Exception raised when calling handler for model '{ConsumerKey}' (CorrelationId:{CorrelationId})", receivedCall.HandlerConsumer.Key, props.CorrelationId);
 
-            HandleException(channelForReply.Value, receivedCall, ex);
+            HandleException(channelForReply.Value, receivedCall.BasicProperties, ex);
         }
 
         //if (_connection == null || _replyConsumerChannel == null)
@@ -488,14 +503,12 @@ internal class Bus : IBus, IBusClient
         //    multiple: false);
     }
 
-    private void HandleException(IModel channelForReply, ReceivedCall receivedCall, MessageBoxCallException ex)
+    private void HandleException(IModel channelForReply, IBasicProperties props, MessageBoxCallException ex)
     {
         if (_connection == null || _replyConsumerChannel == null)
         {
             return;
         }
-
-        var props = receivedCall.BasicProperties;
 
         if (props.ReplyTo != null && props.CorrelationId != null)
         {

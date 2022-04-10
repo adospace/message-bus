@@ -11,7 +11,7 @@ public class RabbitMQBusOptions : IBusOptions
     /// <summary>
     /// RabbitMQ connection Uri
     /// </summary>
-    public Uri Uri { get; set; } = new Uri("ampq://localhost");
+    public Uri Uri { get; set; } = new Uri("amqp://guest:guest@localhost");
 
     /// <summary>
     /// RabbitMQ host name

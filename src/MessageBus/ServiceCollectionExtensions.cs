@@ -32,7 +32,11 @@ namespace MessageBus
 
         public static IHostBuilder AddMessageBus(this IHostBuilder hostBuilder, Action<IMessageBusConfigurator> configuratorAction)
         {
-            hostBuilder.ConfigureServices((_, services) => services.ConfigureMessageBus(configuratorAction));
+            hostBuilder.ConfigureServices((_, services) =>
+            {
+                services.ConfigureMessageBus(configuratorAction);
+                services.AddMessageBusBackgroundService();
+            });
             return hostBuilder;
         }
 
