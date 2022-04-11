@@ -534,6 +534,8 @@ internal class Bus : IBus, IBusClient
             throw new InvalidCastException("Bus not started");
         }
 
+        _logger.LogDebug("Publish to IHandler<{T}>", typeof(T));
+
         byte[] modelSerialized;
 
         try
@@ -564,41 +566,51 @@ internal class Bus : IBus, IBusClient
             throw new InvalidCastException("Bus not started");
         }
 
-        byte[] modelSerialized;
-
-        try
-        {
-            modelSerialized = _messageSerializer.Serialize(model ?? throw new InvalidOperationException());
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Unable to serialize model value of type {ModelType}", model?.GetType());
-            throw;
-        }
-
+        var now = DateTime.Now;
         var call = new RpcCall(this);
 
-        _waitingCalls[call.CorrelationId] = call;
-
-        call.Execute<T>(modelSerialized);
-
         try
         {
-            if (!await call.WaitReplyEvent.WaitAsync(cancellationToken).CancelAfter(timeout ?? _options.DefaultCallTimeout, cancellationToken: cancellationToken))
+            _logger.LogDebug("Calling IHandler<{T}> (CorrelationId={CorrelationId})...", typeof(T), call.CorrelationId);
+
+            byte[] modelSerialized;
+
+            try
             {
-                throw new TimeoutException($"Unable to get a reply to the message '{model.GetType()}' in {timeout ?? _options.DefaultCallTimeout}");
+                modelSerialized = _messageSerializer.Serialize(model ?? throw new InvalidOperationException());
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Unable to serialize model value of type {ModelType}", model?.GetType());
+                throw;
+            }
+
+
+            _waitingCalls[call.CorrelationId] = call;
+
+            call.Execute<T>(modelSerialized);
+
+            try
+            {
+                if (!await call.WaitReplyEvent.WaitAsync(cancellationToken).CancelAfter(timeout ?? _options.DefaultCallTimeout, cancellationToken: cancellationToken))
+                {
+                    throw new TimeoutException($"Unable to get a reply to the message '{model.GetType()}' in {timeout ?? _options.DefaultCallTimeout}");
+                }
+            }
+            finally
+            {
+                _waitingCalls.TryRemove(call.CorrelationId, out var _);
+            }
+
+            if (call.IsException)
+            {
+                throw new MessageBoxCallException(call.RemoteExceptionStackTrace);
             }
         }
         finally
         {
-            _waitingCalls.TryRemove(call.CorrelationId, out var _);
+            _logger.LogDebug("Call to IHandler<{T}> (CorrelationId={CorrelationId}) completed in {CallExecutionTime}", typeof(T), call.CorrelationId, (DateTime.Now - now));
         }
-
-        if (call.IsException)
-        {
-            throw new MessageBoxCallException(call.RemoteExceptionStackTrace);
-        }
-
     }
 
     public async Task<TReply> SendAndGetReply<T, TReply>(T model, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
@@ -608,54 +620,62 @@ internal class Bus : IBus, IBusClient
             throw new InvalidCastException("Bus not started");
         }
 
-        byte[] modelSerialized;
-
-        try
-        {
-            modelSerialized = _messageSerializer.Serialize(model ?? throw new InvalidOperationException());
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Unable to serialize model value of type {ModelType}", model?.GetType());
-            throw;
-        }
-
+        var now = DateTime.Now;
         var call = new RpcCall(this, typeof(TReply));
-        
-        _waitingCalls[call.CorrelationId] = call;
-
-        call.Execute<T>(modelSerialized);
-
         try
         {
-            if (!await call.WaitReplyEvent.WaitAsync(cancellationToken).CancelAfter(timeout ?? _options.DefaultCallTimeout, cancellationToken: cancellationToken))
+            _logger.LogDebug("Calling IHandler<{T}, {TReply}> (CorrelationId={CorrelationId})...", typeof(T), typeof(TReply), call.CorrelationId);
+
+            byte[] modelSerialized;
+
+            try
             {
-                throw new TimeoutException($"Unable to get a reply to the message '{model.GetType()}' (CorrelationId: {call.CorrelationId}) in {timeout ?? _options.DefaultCallTimeout}");
+                modelSerialized = _messageSerializer.Serialize(model ?? throw new InvalidOperationException());
             }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Unable to serialize model value of type {ModelType}", model?.GetType());
+                throw;
+            }
+
+
+            _waitingCalls[call.CorrelationId] = call;
+
+            call.Execute<T>(modelSerialized);
+
+            try
+            {
+                if (!await call.WaitReplyEvent.WaitAsync(cancellationToken).CancelAfter(timeout ?? _options.DefaultCallTimeout, cancellationToken: cancellationToken))
+                {
+                    throw new TimeoutException($"Unable to get a reply to the message '{model.GetType()}' (CorrelationId: {call.CorrelationId}) in {timeout ?? _options.DefaultCallTimeout}");
+                }
+            }
+            finally
+            {
+                _waitingCalls.TryRemove(call.CorrelationId, out var _);
+            }
+
+            if (call.IsException)
+            {
+                throw new MessageBoxCallException(call.RemoteExceptionStackTrace);
+            }
+
+            if (call.ModelDeserializationException != null)
+            {
+                _logger.LogError(call.ModelDeserializationException, "Unable to deserialize reply model of type {ModelType}", typeof(TReply));
+                throw call.ModelDeserializationException;
+            }
+
+            if (call.ReplyMessage == null)
+            {
+                return default!;
+            }
+
+            return (TReply)call.ReplyMessage;
         }
         finally
         {
-            _waitingCalls.TryRemove(call.CorrelationId, out var _);
+            _logger.LogDebug("Call to IHandler<{T}, {TReply}> (CorrelationId={CorrelationId}) completed in {CallExecutionTime}", typeof(T), typeof(TReply), call.CorrelationId, (DateTime.Now-now));
         }
-
-        if (call.IsException)
-        {
-            throw new MessageBoxCallException(call.RemoteExceptionStackTrace);
-        }
-
-        if (call.ModelDeserializationException != null)
-        {
-            _logger.LogError(call.ModelDeserializationException, "Unable to deserialize reply model of type {ModelType}", typeof(TReply));
-            throw call.ModelDeserializationException;
-        }
-
-        if (call.ReplyMessage == null)
-        {
-            return default!;
-        }
-
-
-
-        return (TReply)call.ReplyMessage;
     }
 }
