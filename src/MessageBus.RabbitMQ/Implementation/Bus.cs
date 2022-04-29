@@ -527,7 +527,7 @@ internal class Bus : IBus, IBusClient
         }
     }
 
-    public Task Publish<T>(T model, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
+    public void Publish<T>(T model)
     {
         if (_connection == null || _replyConsumerChannel == null)
         {
@@ -555,8 +555,6 @@ internal class Bus : IBus, IBusClient
             exchange: _options.ApplicationId == null ? key : $"{_options.ApplicationId}_{key}",
             routingKey: string.Empty,
             body: modelSerialized);
-
-        return Task.CompletedTask;
     }
 
     public async Task Send<T>(T model, TimeSpan? timeout = null, CancellationToken cancellationToken = default)

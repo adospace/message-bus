@@ -2,7 +2,7 @@
 {
     public interface IBusClient
     {
-        Task Publish<T>(T model, TimeSpan? timeout = null, CancellationToken cancellationToken = default);
+        void Publish<T>(T model);
 
         Task Send<T>(T model, TimeSpan? timeout = null, CancellationToken cancellationToken = default);
 

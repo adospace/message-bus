@@ -123,7 +123,7 @@ namespace MessageBus.Tests
 
             var busClient = clientHost.Services.GetRequiredService<IBusClient>();
 
-            await busClient.Publish(new SampleModelPublished());
+            busClient.Publish(new SampleModelPublished());
 
             foreach (var ev in new WaitHandle[] { consumer1.HandleCalled, consumer2.HandleCalled })
                 ev.WaitOne(TimeSpan.FromSeconds(10)).Should().BeTrue();
