@@ -84,7 +84,7 @@ internal class Bus : IBus, IBusClient
             }
             else
             {
-                if (_typeofReply != null)
+                if (_typeofReply != null && e.Body.Length > 0)
                 {
                     try
                     {
