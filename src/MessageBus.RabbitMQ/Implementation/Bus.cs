@@ -150,7 +150,7 @@ internal class Bus : IBus, IBusClient
     private EventingBasicConsumer? _replyConsumer;
     private string? _replyQueueName;
 
-    private readonly BufferBlock<ReceivedCall> _incomingCalls;
+    private readonly ActionBlock<ReceivedCall> _incomingCalls;
 
 
     public Bus(
@@ -169,9 +169,9 @@ internal class Bus : IBus, IBusClient
             RequestedHeartbeat = TimeSpan.FromSeconds(30)
         };
         _messageSerializer = messageSerializerFactory.CreateMessageSerializer();
-        _incomingCalls = new BufferBlock<ReceivedCall>(new DataflowBlockOptions
+        _incomingCalls = new ActionBlock<ReceivedCall>(OnMessageReceivedFromClient, new ExecutionDataflowBlockOptions
         { 
-        
+            MaxDegreeOfParallelism = options.MaxDegreeOfParallelism,
         });
         _channelPool = new ObjectPool<IModel>(() => 
         {
@@ -253,11 +253,12 @@ internal class Bus : IBus, IBusClient
 
         try
         {
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                var incomingCall = await _incomingCalls.ReceiveAsync(cancellationToken);
-                await OnMessageReceivedFromClient(incomingCall).ConfigureAwait(false);
-            }
+            //while (!cancellationToken.IsCancellationRequested)
+            //{
+            //    var incomingCall = await _incomingCalls.ReceiveAsync(cancellationToken);
+            //    await OnMessageReceivedFromClient(incomingCall).ConfigureAwait(false);
+            //}
+            await Task.Delay(Timeout.Infinite, cancellationToken);
         }
         catch (OperationCanceledException)
         {
