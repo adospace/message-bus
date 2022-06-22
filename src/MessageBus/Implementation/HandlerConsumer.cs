@@ -10,7 +10,7 @@ namespace MessageBus.Implementation
 {
     internal class HandlerConsumer<T> : IHandlerConsumerWithoutReply where T : class
     {
-        private readonly IMessageSerializer _messageSerializer;
+        //private readonly IMessageSerializer _messageSerializer;
         private readonly IServiceProvider _serviceProvider;
         private readonly ILogger<HandlerConsumer<T>> _logger;
         private readonly ServiceLifetime _serviceLifetime;
@@ -22,7 +22,7 @@ namespace MessageBus.Implementation
             bool isEventHandler = false,
             ServiceLifetime serviceLifetime = ServiceLifetime.Scoped)
         {
-            _messageSerializer = messageSerializerFactory.CreateMessageSerializer();
+            //_messageSerializer = messageSerializerFactory.CreateMessageSerializer();
             _serviceProvider = serviceProvider;
             _logger = logger;
             IsEventHandler = isEventHandler;
@@ -63,7 +63,7 @@ namespace MessageBus.Implementation
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Exception raised when calling handler IHandler<{typeof(T)}>");
+                _logger.LogError(ex, "Exception raised when calling handler IHandler<{HandlerType}> ({Message})", typeof(T), message);
 
                 throw new MessageBoxCallException($"Exception raised when calling handler IHandler<{typeof(T)}>:{Environment.NewLine}{ex}");
             }
@@ -151,7 +151,7 @@ namespace MessageBus.Implementation
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Exception raised when calling handler IHandler<{typeof(T)}, {typeof(TReply)}>");
+                _logger.LogError(ex, "Exception raised when calling handler IHandler<{T}, {TReply}> ({Message})", typeof(T), typeof(TReply), message);
 
                 throw new MessageBoxCallException($"Exception raised when calling handler IHandler<{typeof(T)}, {typeof(TReply)}>:{Environment.NewLine}{ex}");
             }
