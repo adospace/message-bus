@@ -39,10 +39,15 @@ namespace MessageBus.Tests
             await clientHost.StartAsync();
             await consumerHost.StartAsync();
 
+            var messageContextProvider = clientHost.Services.GetRequiredService<IMessageContextProvider>();
+
             var busClient = clientHost.Services.GetRequiredService<IBusClient>();
             var reply = await busClient.SendAndGetReply<SampleModel, SampleModelReply>(new SampleModel("John", "Smith"));
 
             Assert.AreEqual("Hello John Smith!", reply.NameAndSurname);
+
+            messageContextProvider.Context.TryGetValue<int>("HandleCallCount", out var handleCallCount).Should().BeTrue();
+            handleCallCount.Should().Be(1);
         }
 
         //[TestMethod]
@@ -95,7 +100,6 @@ namespace MessageBus.Tests
                 })
                 .Build();
 
-            var consumer1 = new SampleConsumer();
             using var consumerHost1 = Host.CreateDefaultBuilder()
                 .AddMessageBus(cfg =>
                 {
@@ -103,10 +107,12 @@ namespace MessageBus.Tests
                     cfg.UseJsonSerializer();
                     cfg.AddEventHandler<SampleConsumer, SampleModelPublished>(serviceLifetime: ServiceLifetime.Singleton);
                 })
-                .ConfigureServices(services => services.AddSingleton<IHandler<SampleModelPublished>>(consumer1))
+                .ConfigureServices(services =>
+                    services.AddSingleton<IHandler<SampleModelPublished>>(sp => sp.GetRequiredService<SampleConsumer>()))
+                .ConfigureServices(services =>
+                    services.AddSingleton<SampleConsumer>())
                 .Build();
 
-            var consumer2 = new SampleConsumer();
             using var consumerHost2 = Host.CreateDefaultBuilder()
                 .AddMessageBus(cfg =>
                 {
@@ -114,7 +120,10 @@ namespace MessageBus.Tests
                     cfg.UseJsonSerializer();
                     cfg.AddEventHandler<SampleConsumer, SampleModelPublished>(serviceLifetime: ServiceLifetime.Singleton);
                 })
-                .ConfigureServices(services => services.AddSingleton<IHandler<SampleModelPublished>>(consumer2))
+                .ConfigureServices(services => 
+                    services.AddSingleton<IHandler<SampleModelPublished>>())
+                .ConfigureServices(services =>
+                    services.AddSingleton<SampleConsumer>())
                 .Build();
 
             await clientHost.StartAsync();
@@ -124,6 +133,9 @@ namespace MessageBus.Tests
             var busClient = clientHost.Services.GetRequiredService<IBusClient>();
 
             busClient.Publish(new SampleModelPublished());
+
+            var consumer1 = consumerHost1.Services.GetRequiredService<SampleConsumer>();
+            var consumer2 = consumerHost2.Services.GetRequiredService<SampleConsumer>();
 
             foreach (var ev in new WaitHandle[] { consumer1.HandleCalled, consumer2.HandleCalled })
                 ev.WaitOne(TimeSpan.FromSeconds(10)).Should().BeTrue();

@@ -9,17 +9,22 @@ namespace MessageBus.Tests.Helpers
         IHandler<SampleModelDoNotDeserialize>,
         IHandler<SampleModelPublished>
     {
+        private readonly IMessageContextProvider _messageContextProvider;
+
         public AutoResetEvent HandleCalled { get; } = new AutoResetEvent(false);
         public int HandleCallCount { get; private set; }
 
-        public SampleConsumer()
-        { 
-        
+        public SampleConsumer(IMessageContextProvider messageContextProvider)
+        {
+            _messageContextProvider = messageContextProvider;
         }
 
         public Task<SampleModelReply> Handle(SampleModel message, CancellationToken cancellationToken = default)
         {
             HandleCallCount++;
+
+            _messageContextProvider.Context.SetValue("HandleCallCount", HandleCallCount);
+
             HandleCalled.Set();
             return Task.FromResult(new SampleModelReply($"Hello {message.Name} {message.Surname}!"));
         }
@@ -37,6 +42,9 @@ namespace MessageBus.Tests.Helpers
         public Task Handle(SampleModelPublished message, CancellationToken cancellationToken = default)
         {
             HandleCallCount++;
+
+            _messageContextProvider.Context.SetValue("HandleCallCount", HandleCallCount);
+
             HandleCalled.Set();
             return Task.CompletedTask;
         }

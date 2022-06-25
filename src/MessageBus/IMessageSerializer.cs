@@ -2,8 +2,8 @@
 
 public interface IMessageSerializer
 {
-    byte[] Serialize(object model);
+    byte[] Serialize(Message message);
 
-    object Deserialize(ReadOnlyMemory<byte> message, Type targetType);
+    Message Deserialize(ReadOnlyMemory<byte> serializedMessage, Type targetModelType);
 }
 

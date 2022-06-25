@@ -5,10 +5,12 @@ namespace MessageBus.Serializer.Implementation;
 
 internal class JsonMessageSerializerFactory : IMessageSerializerFactory
 {
+    private readonly IMessageContextProvider _messageContextProvider;
     private readonly IEnumerable<JsonSerializerConfigurator> _configurators;
 
-    public JsonMessageSerializerFactory(IEnumerable<JsonSerializerConfigurator> configurators)
+    public JsonMessageSerializerFactory(IMessageContextProvider messageContextProvider, IEnumerable<JsonSerializerConfigurator> configurators)
     {
+        _messageContextProvider = messageContextProvider;
         _configurators = configurators;
     }
 
@@ -33,3 +35,4 @@ internal class JsonMessageSerializerFactory : IMessageSerializerFactory
         return new JsonMessageSerializer(options);
     }
 }
+

@@ -535,13 +535,18 @@ internal class Bus : IBus, IBusClient
             throw new InvalidCastException("Bus not started");
         }
 
+        if (model == null)
+        {
+            throw new ArgumentNullException();
+        }
+
         _logger.LogDebug("Publish to IHandler<{T}>", typeof(T));
 
         byte[] modelSerialized;
 
         try
         {
-            modelSerialized = _messageSerializer.Serialize(model ?? throw new InvalidOperationException());
+            modelSerialized = _messageSerializer.Serialize(new Message(model));
         }
         catch (Exception ex)
         {

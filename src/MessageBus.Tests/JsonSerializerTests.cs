@@ -24,15 +24,14 @@ namespace MessageBus.Tests
                 ref Utf8JsonReader reader,
                 Type typeToConvert,
                 JsonSerializerOptions options) =>
-                    DateTimeOffset.ParseExact(reader.GetString() ?? throw new InvalidOperationException(),
-                        "MM/dd/yyyy", CultureInfo.InvariantCulture);
+                    DateTimeOffset.Parse(reader.GetString() ?? throw new InvalidOperationException(),
+                        CultureInfo.InvariantCulture);
 
             public override void Write(
                 Utf8JsonWriter writer,
                 DateTimeOffset dateTimeValue,
                 JsonSerializerOptions options) =>
-                    writer.WriteStringValue(dateTimeValue.ToString(
-                        "MM/dd/yyyy", CultureInfo.InvariantCulture));
+                    writer.WriteStringValue(dateTimeValue.ToString(CultureInfo.InvariantCulture));
         }
         private class WeatherForecast
         {
@@ -50,16 +49,15 @@ namespace MessageBus.Tests
                     .ConfigureJsonSerializer(cfg => cfg.WriteIndented = true))
                 .Build();
 
-            var serializer = host.Services.GetRequiredService<IMessageSerializerFactory>().CreateMessageSerializer();
+            var serializer = host.Services.GetRequiredService<IMessageSerializerFactory>()
+                .CreateMessageSerializer();
 
-            var json = Encoding.UTF8.GetString(serializer.Serialize(new WeatherForecast()));
-            var expected = @"{
-  ""Date"": ""12/31/2021"",
-  ""TemperatureCelsius"": 12,
-  ""Summary"": ""Hot""
-}".ReplaceLineEndings();
+            var model = new WeatherForecast();
+            var serialized = serializer.Serialize(new Message(model));
+            var deserializedModel = serializer.Deserialize(serialized, typeof(WeatherForecast));
+            Assert.IsNotNull(deserializedModel);
 
-            json.Should().Be(expected);
+            deserializedModel.Should().BeEquivalentTo(model);
         }
     }
 }

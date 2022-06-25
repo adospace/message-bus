@@ -1,6 +1,4 @@
 ﻿namespace MessageBus
 {
-    public interface IMessage
-    {
-    }
+    public record Message(object Model, IMessageContext? Context = null);
 }
