@@ -21,9 +21,14 @@ namespace MessageBus.Tests.Helpers
 
         public Task<SampleModelReply> Handle(SampleModel message, CancellationToken cancellationToken = default)
         {
+            if (_messageContextProvider.Context.TryGetValue<int>("HandleCallCount", out var handleCallCount))
+            {
+                HandleCallCount = handleCallCount;
+            }
+
             HandleCallCount++;
 
-            _messageContextProvider.Context.SetValue("HandleCallCount", HandleCallCount);
+            _messageContextProvider.Context.AddOrReplace("HandleCallCount", HandleCallCount);
 
             HandleCalled.Set();
             return Task.FromResult(new SampleModelReply($"Hello {message.Name} {message.Surname}!"));
@@ -43,7 +48,7 @@ namespace MessageBus.Tests.Helpers
         {
             HandleCallCount++;
 
-            _messageContextProvider.Context.SetValue("HandleCallCount", HandleCallCount);
+            _messageContextProvider.Context.AddOrReplace("HandleCallCount", HandleCallCount);
 
             HandleCalled.Set();
             return Task.CompletedTask;

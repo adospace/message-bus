@@ -40,6 +40,7 @@ namespace MessageBus.Tests
             await consumerHost.StartAsync();
 
             var messageContextProvider = clientHost.Services.GetRequiredService<IMessageContextProvider>();
+            messageContextProvider.Context.AddOrReplace("HandleCallCount", 1);
 
             var busClient = clientHost.Services.GetRequiredService<IBusClient>();
             var reply = await busClient.SendAndGetReply<SampleModel, SampleModelReply>(new SampleModel("John", "Smith"));
@@ -47,7 +48,43 @@ namespace MessageBus.Tests
             Assert.AreEqual("Hello John Smith!", reply.NameAndSurname);
 
             messageContextProvider.Context.TryGetValue<int>("HandleCallCount", out var handleCallCount).Should().BeTrue();
-            handleCallCount.Should().Be(1);
+            handleCallCount.Should().Be(2);
+        }
+
+        [TestMethod]
+        public async Task SendAndReceiveMessageInRootScope()
+        {
+            string appId = Guid.NewGuid().ToString();
+            using var clientHost = Host.CreateDefaultBuilder()
+                .AddMessageBus(cfg =>
+                {
+                    cfg.UseRabbitMQ(conf => conf.ApplicationId = appId);
+                    cfg.UseJsonSerializer();
+                })
+                .Build();
+
+            using var consumerHost = Host.CreateDefaultBuilder()
+                .AddMessageBus(cfg =>
+                {
+                    cfg.UseRabbitMQ(conf => conf.ApplicationId = appId);
+                    cfg.UseJsonSerializer();
+                    cfg.AddHandler<SampleConsumer, SampleModel, SampleModelReply>(ServiceLifetime.Singleton);
+                })
+                .Build();
+
+            await clientHost.StartAsync();
+            await consumerHost.StartAsync();
+
+            var messageContextProvider = clientHost.Services.GetRequiredService<IMessageContextProvider>();
+            messageContextProvider.Context.AddOrReplace("HandleCallCount", 1);
+
+            var busClient = clientHost.Services.GetRequiredService<IBusClient>();
+            var reply = await busClient.SendAndGetReply<SampleModel, SampleModelReply>(new SampleModel("John", "Smith"));
+
+            Assert.AreEqual("Hello John Smith!", reply.NameAndSurname);
+
+            messageContextProvider.Context.TryGetValue<int>("HandleCallCount", out var handleCallCount).Should().BeTrue();
+            handleCallCount.Should().Be(2);
         }
 
         //[TestMethod]
@@ -121,7 +158,7 @@ namespace MessageBus.Tests
                     cfg.AddEventHandler<SampleConsumer, SampleModelPublished>(serviceLifetime: ServiceLifetime.Singleton);
                 })
                 .ConfigureServices(services => 
-                    services.AddSingleton<IHandler<SampleModelPublished>>())
+                    services.AddSingleton<IHandler<SampleModelPublished>>(sp => sp.GetRequiredService<SampleConsumer>()))
                 .ConfigureServices(services =>
                     services.AddSingleton<SampleConsumer>())
                 .Build();

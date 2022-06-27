@@ -51,10 +51,14 @@ namespace MessageBus.Tests
 
             var serializer = host.Services.GetRequiredService<IMessageSerializerFactory>()
                 .CreateMessageSerializer();
+            var messageContextProvider = host.Services.GetRequiredService<IMessageContextProvider>();
 
             var model = new WeatherForecast();
-            var serialized = serializer.Serialize(new Message(model));
-            var deserializedModel = serializer.Deserialize(serialized, typeof(WeatherForecast));
+            var serialized = serializer.Serialize(new Message(model, messageContextProvider.Context));
+            var deserializedMessage = serializer.Deserialize(serialized, typeof(WeatherForecast));
+            Assert.IsNotNull(deserializedMessage);
+
+            var deserializedModel = deserializedMessage.Model;
             Assert.IsNotNull(deserializedModel);
 
             deserializedModel.Should().BeEquivalentTo(model);

@@ -17,12 +17,12 @@ namespace MessageBus
     {
         bool IsEventHandler { get; }
 
-        Task OnHandle(object message, CancellationToken cancellationToken = default);
+        Task OnHandle(Message message, CancellationToken cancellationToken = default);
     }
 
     public interface IHandlerConsumerWithReply : IHandlerConsumer
     {
 
-        Task<byte[]?> OnHandle(object message, CancellationToken cancellationToken = default);
+        Task<byte[]?> OnHandle(Message message, CancellationToken cancellationToken = default);
     }
 }

@@ -22,15 +22,9 @@ public static class ServiceCollectionExtensions
         });
 
         messageBusConfigurator.Services.TryAddSingleton<IBus>(sp => sp.GetRequiredService<Bus>());
-        messageBusConfigurator.Services.TryAddSingleton<IBusClient>(sp => sp.GetRequiredService<Bus>());
+        messageBusConfigurator.Services.TryAddScoped<IBusClient, BusClient>();
 
         return messageBusConfigurator;
     }
-    //public static IHostBuilder UseRabbitMQ(this IHostBuilder hostBuilder, Action<RabbitMQBusOptions>? configureOptions = null)
-    //{
-    //    hostBuilder.ConfigureServices((_, services) => services.UseRabbitMQ(configureOptions));
-    //    return hostBuilder;
-    //}
-
 }
 

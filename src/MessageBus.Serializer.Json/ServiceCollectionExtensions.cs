@@ -12,11 +12,14 @@ public static class ServiceCollectionExtensions
     public static IMessageBusConfigurator UseJsonSerializer(this IMessageBusConfigurator messageBusConfigurator, Action<JsonSerializerOptions>? optionsConfigureAction = null)
     {
         messageBusConfigurator.Services.TryAddSingleton<IMessageSerializerFactory, JsonMessageSerializerFactory>();
-        messageBusConfigurator.Services.TryAddScoped<IMessageContextProvider, MessageContextProvider>();
         if (optionsConfigureAction != null)
         {
             messageBusConfigurator.Services.AddTransient(_ => new JsonSerializerConfigurator(optionsConfigureAction));
         }
+
+        messageBusConfigurator.Services.TryAddScoped<MessageContextProvider>();
+        messageBusConfigurator.Services.TryAddScoped<IMessageContextProvider>(sp => sp.GetRequiredService<Implementation.MessageContextProvider>());
+        messageBusConfigurator.Services.TryAddScoped<IMessageContextFactory>(sp => sp.GetRequiredService<Implementation.MessageContextProvider>());
 
         return messageBusConfigurator;
     }

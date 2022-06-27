@@ -35,21 +35,25 @@ namespace MessageBus.Implementation
 
         public bool IsEventHandler { get; }
 
-        public async Task OnHandle(object untypedMessage, CancellationToken cancellationToken)
+        public async Task OnHandle(Message message, CancellationToken cancellationToken)
         {
-            T message = (T)untypedMessage;
+            T modelObject = (T)message.Model;
             if (_serviceLifetime == ServiceLifetime.Scoped)
             {
                 using var scope = _serviceProvider.CreateScope();
                 IHandler<T> handler = scope.ServiceProvider.GetRequiredService<IHandler<T>>();
+                var contextProvider = scope.ServiceProvider.GetRequiredService<IMessageContextFactory>();
+                contextProvider.SetContext(message.Context);
 
-                await CallHandler(message, handler, cancellationToken);
+                await CallHandler(modelObject, handler, cancellationToken);
             }
             else
             {
                 IHandler<T> handler = _serviceProvider.GetRequiredService<IHandler<T>>();
+                var contextProvider = _serviceProvider.GetRequiredService<IMessageContextFactory>();
+                contextProvider.SetContext(message.Context);
 
-                await CallHandler(message, handler, cancellationToken);
+                await CallHandler(modelObject, handler, cancellationToken);
             }
         }
 
@@ -93,9 +97,9 @@ namespace MessageBus.Implementation
 
         public Type ModelType => typeof(T);
 
-        public async Task<byte[]?> OnHandle(object untypedMessage, CancellationToken cancellationToken)
+        public async Task<byte[]?> OnHandle(Message message, CancellationToken cancellationToken)
         {
-            T message = (T)untypedMessage;
+            T modelObject = (T)message.Model;
 
             //1. Eseguo la chiamata all'handler
             TReply? replyMessage;
@@ -104,14 +108,18 @@ namespace MessageBus.Implementation
             {
                 using var scope = _serviceProvider.CreateScope();
                 var handler = scope.ServiceProvider.GetRequiredService<IHandler<T, TReply>>();
+                var contextProvider = scope.ServiceProvider.GetRequiredService<IMessageContextFactory>();
+                contextProvider.SetContext(message.Context);
 
-                replyMessage = await CallHandler(message, handler, cancellationToken);
+                replyMessage = await CallHandler(modelObject, handler, cancellationToken);
             }
             else
             {
                 var handler = _serviceProvider.GetRequiredService<IHandler<T, TReply>>();
+                var contextProvider = _serviceProvider.GetRequiredService<IMessageContextFactory>();
+                contextProvider.SetContext(message.Context);
 
-                replyMessage = await CallHandler(message, handler, cancellationToken);
+                replyMessage = await CallHandler(modelObject, handler, cancellationToken);
             }
 
             //2. Deserializzo il messaggio di Reply
@@ -124,7 +132,7 @@ namespace MessageBus.Implementation
             {
                 try
                 {
-                    return _messageSerializer.Serialize(replyMessage);
+                    return _messageSerializer.Serialize(new Message(replyMessage, message.Context));
                 }
                 catch (Exception ex)
                 {

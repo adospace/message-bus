@@ -13,42 +13,26 @@ using System.Threading.Tasks.Dataflow;
 
 namespace MessageBus.RabbitMQ.Implementation;
 
-internal class Bus : IBus, IBusClient
+internal class Bus : IBus
 {
     private class RpcCall
     {
         private readonly Bus _bus;
         private readonly Type? _typeofReply;
-        //private readonly IModel _channel;
         private readonly IMessageSerializer _messageSerializer;
-        //private readonly RabbitMQBusOptions _options;
-        //private readonly string _replyQueueName;
 
         public RpcCall(Bus bus, Type? typeofReply = null)
         {
             _bus = bus;
             _typeofReply = typeofReply;
-            //_channel = bus._replyConsumerChannel ?? throw new InvalidOperationException();
             _messageSerializer = bus._messageSerializer;
-            //_options = bus._options;
-            //_replyQueueName = bus._replyQueueName ?? throw new InvalidOperationException();
-
-            //_replyQueueName = _channel.QueueDeclare(arguments: _bus.CreateQueuePropertiesFromOptions()).QueueName;
-            //_replyConsumer = new AsyncEventingBasicConsumer(_channel);
-
-            //_replyConsumer.Received += (s, e) => OnReceivedReply(e);
-
-            //_channel.BasicConsume(
-            //    queue: _replyQueueName,
-            //    consumer: _replyConsumer,
-            //    autoAck: true);
 
             CorrelationId = Guid.NewGuid().ToString();
         }
 
         public AsyncAutoResetEvent WaitReplyEvent { get; } = new AsyncAutoResetEvent();
 
-        public object? ReplyMessage { get; private set; }
+        public Message? ReplyMessage { get; private set; }
 
         public string? RemoteExceptionStackTrace { get; private set; }
 
@@ -109,7 +93,7 @@ internal class Bus : IBus, IBusClient
     {
         public IBasicProperties BasicProperties { get; }
 
-        public object Message { get; }
+        public Message Message { get; }
 
         public string ConsumerTag { get; }
 
@@ -123,7 +107,7 @@ internal class Bus : IBus, IBusClient
 
         public IHandlerConsumer HandlerConsumer { get; }
 
-        public ReceivedCall(IHandlerConsumer handlerConsumer, BasicDeliverEventArgs args, object message)
+        public ReceivedCall(IHandlerConsumer handlerConsumer, BasicDeliverEventArgs args, Message message)
         {
             HandlerConsumer = handlerConsumer;
             BasicProperties = args.BasicProperties;
@@ -253,11 +237,6 @@ internal class Bus : IBus, IBusClient
 
         try
         {
-            //while (!cancellationToken.IsCancellationRequested)
-            //{
-            //    var incomingCall = await _incomingCalls.ReceiveAsync(cancellationToken);
-            //    await OnMessageReceivedFromClient(incomingCall).ConfigureAwait(false);
-            //}
             await Task.Delay(Timeout.Infinite, cancellationToken);
         }
         catch (OperationCanceledException)
@@ -272,7 +251,7 @@ internal class Bus : IBus, IBusClient
 
     private void OnReceivedMessageFromIncomingCall(IHandlerConsumer handlerConsumer, BasicDeliverEventArgs ea)
     {
-        object message;
+        Message message;
         try
         {
             message = _messageSerializer.Deserialize(ea.Body, handlerConsumer.ModelType);
@@ -528,32 +507,32 @@ internal class Bus : IBus, IBusClient
         }
     }
 
-    public void Publish<T>(T model)
+    public void Publish(Message message)
     {
         if (_connection == null || _replyConsumerChannel == null)
         {
             throw new InvalidCastException("Bus not started");
         }
 
-        if (model == null)
+        if (message.Model == null)
         {
             throw new ArgumentNullException();
         }
 
-        _logger.LogDebug("Publish to IHandler<{T}>", typeof(T));
+        _logger.LogDebug("Publish to IHandler<{T}>", message.Model.GetType());
 
         byte[] modelSerialized;
 
         try
         {
-            modelSerialized = _messageSerializer.Serialize(new Message(model));
+            modelSerialized = _messageSerializer.Serialize(message);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Unable to serialize model value of type {ModelType}", model?.GetType());
+            _logger.LogError(ex, "Unable to serialize model value of type {ModelType}", message.Model.GetType());
             throw;
         }
-        var key = typeof(T).FullName ?? throw new InvalidOperationException();
+        var key = message.Model.GetType().FullName ?? throw new InvalidOperationException();
 
         using var channelForPublish = _channelPool.Get();
 
@@ -563,11 +542,16 @@ internal class Bus : IBus, IBusClient
             body: modelSerialized);
     }
 
-    public async Task Send<T>(T model, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
+    public async Task Send<T>(Message message, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
     {
         if (_connection == null || _replyConsumerChannel == null)
         {
             throw new InvalidCastException("Bus not started");
+        }
+
+        if (message.Model == null)
+        {
+            throw new ArgumentNullException();
         }
 
         var now = DateTime.Now;
@@ -575,17 +559,17 @@ internal class Bus : IBus, IBusClient
 
         try
         {
-            _logger.LogDebug("Calling IHandler<{T}> (CorrelationId={CorrelationId})...", typeof(T), call.CorrelationId);
+            _logger.LogDebug("Calling IHandler<{T}> (CorrelationId={CorrelationId})...", message.Model.GetType(), call.CorrelationId);
 
             byte[] modelSerialized;
 
             try
             {
-                modelSerialized = _messageSerializer.Serialize(model ?? throw new InvalidOperationException());
+                modelSerialized = _messageSerializer.Serialize(message);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Unable to serialize model value of type {ModelType}", model?.GetType());
+                _logger.LogError(ex, "Unable to serialize model value of type {ModelType}", message.Model.GetType());
                 throw;
             }
 
@@ -598,7 +582,7 @@ internal class Bus : IBus, IBusClient
             {
                 if (!await call.WaitReplyEvent.WaitAsync(cancellationToken).CancelAfter(timeout ?? _options.DefaultCallTimeout, cancellationToken: cancellationToken))
                 {
-                    throw new TimeoutException($"Unable to get a reply to the message '{model.GetType()}' in {timeout ?? _options.DefaultCallTimeout}");
+                    throw new TimeoutException($"Unable to get a reply to the message '{message.Model.GetType()}' in {timeout ?? _options.DefaultCallTimeout}");
                 }
             }
             finally
@@ -617,11 +601,16 @@ internal class Bus : IBus, IBusClient
         }
     }
 
-    public async Task<TReply> SendAndGetReply<T, TReply>(T model, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
+    public async Task<Message> SendAndGetReply<T, TReply>(Message message, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
     {
         if (_connection == null || _replyConsumerChannel == null)
         {
             throw new InvalidCastException("Bus not started");
+        }
+
+        if (message.Model == null)
+        {
+            throw new ArgumentNullException();
         }
 
         var now = DateTime.Now;
@@ -634,11 +623,11 @@ internal class Bus : IBus, IBusClient
 
             try
             {
-                modelSerialized = _messageSerializer.Serialize(model ?? throw new InvalidOperationException());
+                modelSerialized = _messageSerializer.Serialize(message);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Unable to serialize model value of type {ModelType}", model?.GetType());
+                _logger.LogError(ex, "Unable to serialize model value of type {ModelType}", message.Model.GetType());
                 throw;
             }
 
@@ -651,7 +640,7 @@ internal class Bus : IBus, IBusClient
             {
                 if (!await call.WaitReplyEvent.WaitAsync(cancellationToken).CancelAfter(timeout ?? _options.DefaultCallTimeout, cancellationToken: cancellationToken))
                 {
-                    throw new TimeoutException($"Unable to get a reply to the message '{model.GetType()}' (CorrelationId: {call.CorrelationId}) in {timeout ?? _options.DefaultCallTimeout}");
+                    throw new TimeoutException($"Unable to get a reply to the message '{message.Model.GetType()}' (CorrelationId: {call.CorrelationId}) in {timeout ?? _options.DefaultCallTimeout}");
                 }
             }
             finally
@@ -675,7 +664,7 @@ internal class Bus : IBus, IBusClient
                 return default!;
             }
 
-            return (TReply)call.ReplyMessage;
+            return call.ReplyMessage;
         }
         finally
         {

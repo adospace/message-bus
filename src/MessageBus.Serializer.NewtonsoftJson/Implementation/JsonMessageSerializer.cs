@@ -15,12 +15,12 @@ internal class JsonMessageSerializer : IMessageSerializer
 
     }
 
-    public object Deserialize(ReadOnlyMemory<byte> message, Type targetType)
+    public Message Deserialize(ReadOnlyMemory<byte> message, Type targetType)
     {
         throw new NotImplementedException();
     }
 
-    public byte[] Serialize(object model)
+    public byte[] Serialize(Message model)
     {
         throw new NotImplementedException();
     }
