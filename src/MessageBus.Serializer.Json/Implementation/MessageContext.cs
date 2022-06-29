@@ -64,7 +64,7 @@ namespace MessageBus.Serializer.Implementation
             _serializerOptions = serializerOptions;
         }
 
-        public int PropertyCount => throw new NotImplementedException();
+        public int PropertyCount => _values.Count;
 
         public void Add<T>(string key, T value)
         {
