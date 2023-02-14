@@ -136,6 +136,7 @@ internal class Bus : IBus
 
     private readonly ActionBlock<ReceivedCall> _incomingCalls;
 
+    private readonly Dictionary<string, object> _queueProperties;
 
     public Bus(
         RabbitMQBusOptions options, 
@@ -168,20 +169,17 @@ internal class Bus : IBus
             newChannel.BasicQos(0, 1, false);
             return newChannel;
         });
-    }
 
-    private Dictionary<string, object> CreateQueuePropertiesFromOptions()
-    { 
-        var args = new Dictionary<string, object>();
+        _queueProperties = new();
+
         if (_options.QueueExpiration != null)
         {
-            args["x-expires"] = (int)_options.QueueExpiration.Value.TotalMilliseconds;
+            _queueProperties["x-expires"] = (int)_options.QueueExpiration.Value.TotalMilliseconds;
         }
         if (_options.DefaultTimeToLive != null)
         {
-            args["x-message-ttl"] = (int)_options.DefaultTimeToLive.Value.TotalMilliseconds;
+            _queueProperties["x-message-ttl"] = (int)_options.DefaultTimeToLive.Value.TotalMilliseconds;
         }
-        return args;
     }
 
     public Task Start(CancellationToken cancellationToken = default)
@@ -196,7 +194,7 @@ internal class Bus : IBus
         _replyConsumerChannel = _connection.CreateModel();
         _replyConsumerChannel.BasicQos(0, 1, false);
 
-        _replyQueueName = _replyConsumerChannel.QueueDeclare(arguments: CreateQueuePropertiesFromOptions()).QueueName;
+        _replyQueueName = _replyConsumerChannel.QueueDeclare(arguments: _queueProperties).QueueName;
         _replyConsumer = new EventingBasicConsumer(_replyConsumerChannel);
 
         foreach (var handlerConsumer in _handlerConsumers)
@@ -318,7 +316,7 @@ internal class Bus : IBus
                 durable: false,
                 exclusive: false,
                 autoDelete: false, 
-                arguments: CreateQueuePropertiesFromOptions());
+                arguments: _queueProperties);
 
         }
         catch (OperationInterruptedException ex)
@@ -360,7 +358,7 @@ internal class Bus : IBus
         try
         {
             queueName = _replyConsumerChannel.QueueDeclare(
-                arguments: CreateQueuePropertiesFromOptions()).QueueName;
+                arguments: _queueProperties).QueueName;
         }
         catch (OperationInterruptedException ex)
         {
