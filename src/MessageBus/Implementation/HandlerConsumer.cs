@@ -41,18 +41,18 @@ namespace MessageBus.Implementation
             if (_serviceLifetime == ServiceLifetime.Scoped)
             {
                 using var scope = _serviceProvider.CreateScope();
-                IHandler<T> handler = scope.ServiceProvider.GetRequiredService<IHandler<T>>();
                 var contextProvider = scope.ServiceProvider.GetRequiredService<IMessageContextFactory>();
                 contextProvider.SetContext(message.Context);
 
+                IHandler<T> handler = scope.ServiceProvider.GetRequiredService<IHandler<T>>();
                 await CallHandler(modelObject, handler, cancellationToken);
             }
             else
             {
-                IHandler<T> handler = _serviceProvider.GetRequiredService<IHandler<T>>();
                 var contextProvider = _serviceProvider.GetRequiredService<IMessageContextFactory>();
                 contextProvider.SetContext(message.Context);
 
+                IHandler<T> handler = _serviceProvider.GetRequiredService<IHandler<T>>();
                 await CallHandler(modelObject, handler, cancellationToken);
             }
         }
@@ -107,18 +107,18 @@ namespace MessageBus.Implementation
             if (_serviceLifetime == ServiceLifetime.Scoped)
             {
                 using var scope = _serviceProvider.CreateScope();
-                var handler = scope.ServiceProvider.GetRequiredService<IHandler<T, TReply>>();
                 var contextProvider = scope.ServiceProvider.GetRequiredService<IMessageContextFactory>();
                 contextProvider.SetContext(message.Context);
 
+                var handler = scope.ServiceProvider.GetRequiredService<IHandler<T, TReply>>();
                 replyMessage = await CallHandler(modelObject, handler, cancellationToken);
             }
             else
             {
-                var handler = _serviceProvider.GetRequiredService<IHandler<T, TReply>>();
                 var contextProvider = _serviceProvider.GetRequiredService<IMessageContextFactory>();
                 contextProvider.SetContext(message.Context);
 
+                var handler = _serviceProvider.GetRequiredService<IHandler<T, TReply>>();
                 replyMessage = await CallHandler(modelObject, handler, cancellationToken);
             }
 
