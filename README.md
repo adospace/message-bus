@@ -10,6 +10,12 @@ Currently it supports RabbitMQ as message broker and System.Text.Json as seriali
 2. Easy to configure, perfectly integrated with the Microsoft dependency injection
 3. Supports auto-reconnection by default
 
+## Install
+
+```
+dotnet add package Message-Bus
+```
+
 ## Pulish/Subscribe
 
 ```csharp
