@@ -44,27 +44,27 @@ internal class Bus : IBus
 
         public void Execute<T>(byte[] modelSerialized)
         {
-            using var channelFromPool = _bus._channelPool.Get();
-            var props = channelFromPool.Value.CreateBasicProperties();
+            using var channelFromPool = _bus._connectionManager.GetChannel();
+            var props = channelFromPool.CreateBasicProperties();
             props.CorrelationId = CorrelationId;
-            props.ReplyTo = _bus._replyQueueName;
+            props.ReplyTo = _bus._connectionManager.ReplyQueueName;
 
             var key = typeof(T).FullName ?? throw new InvalidOperationException();
 
-            channelFromPool.Value.BasicPublish(
+            channelFromPool.BasicPublish(
                 exchange: string.Empty,
                 routingKey: _bus._options.ApplicationId == null ? key : $"{_bus._options.ApplicationId}_{key}",
                 basicProperties: props,
                 body: modelSerialized);
         }
 
-        public Task OnReceivedReply(BasicDeliverEventArgs e)
+        public void OnReceivedReply(BasicDeliverEventArgs e)
         {
             if (e.BasicProperties.IsHeadersPresent() &&
                 e.BasicProperties.Headers.TryGetValue("IsException", out var _))
             {
                 IsException = true;
-                RemoteExceptionStackTrace = Encoding.UTF8.GetString(e.Body.ToArray());
+                RemoteExceptionStackTrace = Encoding.UTF8.GetString(e.Body.Span);
             }
             else
             {
@@ -84,8 +84,6 @@ internal class Bus : IBus
             }
 
             WaitReplyEvent.Set();
-
-            return Task.CompletedTask;
         }
     }
 
@@ -121,22 +119,23 @@ internal class Bus : IBus
     }
 
     private readonly RabbitMQBusOptions _options;
+    private readonly ConnectionManager _connectionManager;
     private readonly IEnumerable<IHandlerConsumer> _handlerConsumers;
     private readonly ILogger<Bus> _logger;
-    private readonly ConnectionFactory _factory;
+    //private readonly ConnectionFactory _factory;
     private readonly IMessageSerializer _messageSerializer;
-    private IConnection? _connection;
-    private IModel? _replyConsumerChannel;
-    private readonly ConcurrentBag<string> _consumers = new();
+    //private IConnection? _connection;
+    //private IModel? _replyConsumerChannel;
+    //private readonly ConcurrentBag<string> _consumers = new();
     private readonly ConcurrentDictionary<string, RpcCall> _waitingCalls = new();
-    private readonly ObjectPool<IModel> _channelPool;
+    //private readonly ObjectPool<IModel> _channelPool;
 
-    private EventingBasicConsumer? _replyConsumer;
-    private string? _replyQueueName;
+    //private EventingBasicConsumer? _replyConsumer;
+    //private string? _replyQueueName;
 
     private readonly ActionBlock<ReceivedCall> _incomingCalls;
 
-    private readonly Dictionary<string, object> _queueProperties;
+    //private readonly Dictionary<string, object> _queueProperties;
 
     public Bus(
         RabbitMQBusOptions options, 
@@ -147,88 +146,96 @@ internal class Bus : IBus
         _options = options;
         _handlerConsumers = handlerConsumers;
         _logger = logger;
-        _factory = new ConnectionFactory()
-        {
-            HostName = options.HostName,
-            Uri = options.Uri,
-            RequestedHeartbeat = TimeSpan.FromSeconds(30)
-        };
+        _connectionManager = new ConnectionManager(
+            options,
+            handlerConsumers,
+            logger,
+            OnReceivedMessageFromIncomingCall,
+            OnReplyMessageReceived);
+        //_factory = new ConnectionFactory()
+        //{
+        //    HostName = options.HostName,
+        //    Uri = options.Uri,
+        //    RequestedHeartbeat = TimeSpan.FromSeconds(30)
+        //};
         _messageSerializer = messageSerializerFactory.CreateMessageSerializer();
         _incomingCalls = new ActionBlock<ReceivedCall>(OnMessageReceivedFromClient, new ExecutionDataflowBlockOptions
         { 
             MaxDegreeOfParallelism = options.MaxDegreeOfParallelism,
         });
-        _channelPool = new ObjectPool<IModel>(() => 
-        {
-            if (_connection == null)
-            {
-                throw new InvalidOperationException();
-            }
+        //_channelPool = new ObjectPool<IModel>(() => 
+        //{
+        //    if (_connection == null)
+        //    {
+        //        throw new InvalidOperationException();
+        //    }
 
-            var newChannel = _connection.CreateModel();
-            newChannel.BasicQos(0, 1, false);
-            return newChannel;
-        });
+        //    var newChannel = _connection.CreateModel();
+        //    newChannel.BasicQos(0, 1, false);
+        //    return newChannel;
+        //});
 
-        _queueProperties = new();
+        //_queueProperties = new();
 
-        if (_options.QueueExpiration != null)
-        {
-            _queueProperties["x-expires"] = (int)_options.QueueExpiration.Value.TotalMilliseconds;
-        }
-        if (_options.DefaultTimeToLive != null)
-        {
-            _queueProperties["x-message-ttl"] = (int)_options.DefaultTimeToLive.Value.TotalMilliseconds;
-        }
+        //if (_options.QueueExpiration != null)
+        //{
+        //    _queueProperties["x-expires"] = (int)_options.QueueExpiration.Value.TotalMilliseconds;
+        //}
+        //if (_options.DefaultTimeToLive != null)
+        //{
+        //    _queueProperties["x-message-ttl"] = (int)_options.DefaultTimeToLive.Value.TotalMilliseconds;
+        //}
     }
 
     public Task Start(CancellationToken cancellationToken = default)
     {
-        if (_connection != null)
-        {
-            throw new InvalidCastException();
-        }
+        _connectionManager.Start();
 
-        _logger.LogDebug("Connecting to RabbitMQ: {Uri}", _factory.Uri);
-        _connection = _factory.CreateConnection();
-        _replyConsumerChannel = _connection.CreateModel();
-        _replyConsumerChannel.BasicQos(0, 1, false);
+        //if (_connection != null)
+        //{
+        //    throw new InvalidOperationException();
+        //}
 
-        _replyQueueName = _replyConsumerChannel.QueueDeclare(arguments: _queueProperties).QueueName;
-        _replyConsumer = new EventingBasicConsumer(_replyConsumerChannel);
+        //_logger.LogDebug("Connecting to RabbitMQ: {Uri}", _factory.Uri);
+        //_connection = _factory.CreateConnection();
+        //_replyConsumerChannel = _connection.CreateModel();
+        //_replyConsumerChannel.BasicQos(0, 1, false);
 
-        foreach (var handlerConsumer in _handlerConsumers)
-        {
-            if (handlerConsumer is IHandlerConsumerWithoutReply handlerConsumerWithoutReply)
-            {
-                var consumer = handlerConsumerWithoutReply.IsEventHandler ?
-                    RegisterConsumerToExchange(handlerConsumer.Key)
-                    :
-                    RegisterConsumerToQueue(handlerConsumer.Key);
+        //_replyQueueName = _replyConsumerChannel.QueueDeclare(arguments: _queueProperties).QueueName;
+        //_replyConsumer = new EventingBasicConsumer(_replyConsumerChannel);
 
-                consumer.Received += (s, ea) => OnReceivedMessageFromIncomingCall(handlerConsumerWithoutReply, ea);
-            }
-            else if (handlerConsumer is IHandlerConsumerWithReply handlerConsumerWithReply)
-            {
-                var consumer = RegisterConsumerToQueue(handlerConsumer.Key);
+        //foreach (var handlerConsumer in _handlerConsumers)
+        //{
+        //    if (handlerConsumer is IHandlerConsumerWithoutReply handlerConsumerWithoutReply)
+        //    {
+        //        var consumer = handlerConsumerWithoutReply.IsEventHandler ?
+        //            RegisterConsumerToExchange(handlerConsumer.Key)
+        //            :
+        //            RegisterConsumerToQueue(handlerConsumer.Key);
 
-                consumer.Received += (s, ea) => OnReceivedMessageFromIncomingCall(handlerConsumerWithReply, ea);
-            }
-        }
+        //        consumer.Received += (s, ea) => OnReceivedMessageFromIncomingCall(handlerConsumerWithoutReply, ea);
+        //    }
+        //    else if (handlerConsumer is IHandlerConsumerWithReply handlerConsumerWithReply)
+        //    {
+        //        var consumer = RegisterConsumerToQueue(handlerConsumer.Key);
 
-        _replyConsumer.Received += OnReplyMessageReceived;
+        //        consumer.Received += (s, ea) => OnReceivedMessageFromIncomingCall(handlerConsumerWithReply, ea);
+        //    }
+        //}
 
-        _replyConsumerChannel.BasicConsume(
-            queue: _replyQueueName,
-            consumer: _replyConsumer,
-            autoAck: true);
+        //_replyConsumer.Received += OnReplyMessageReceived;
+
+        //_replyConsumerChannel.BasicConsume(
+        //    queue: _replyQueueName,
+        //    consumer: _replyConsumer,
+        //    autoAck: true);
 
         return Task.CompletedTask;
     }
 
     public async Task Run(CancellationToken cancellationToken = default)
     {
-        if (_connection == null || _replyConsumer == null)
+        if (_connectionManager == null)
         {
             throw new InvalidCastException();
         }
@@ -258,9 +265,7 @@ internal class Bus : IBus
         {
             _logger.LogError(ex, "Unable to deserialize model of type {ModelType}", handlerConsumer.ModelType);
 
-            using var channelForReply = _channelPool.Get();
-            HandleException(
-                channelForReply.Value, 
+            HandleExceptionInCallingInternalConsumer(
                 ea.BasicProperties, 
                 new MessageBoxCallException($"Unable to deserialize model of type {handlerConsumer.ModelType}:{Environment.NewLine}{ex.InnerException}"));
             return;
@@ -279,107 +284,108 @@ internal class Bus : IBus
 
     public Task Stop(CancellationToken cancellationToken = default)
     {
-        if (_replyConsumer != null)
-        {
-            _replyConsumer.Received -= OnReplyMessageReceived;
-            _replyConsumer = null;
-            _replyQueueName = null;
-        }
+        _connectionManager.Stop();
+        //if (_replyConsumer != null)
+        //{
+        //    _replyConsumer.Received -= OnReplyMessageReceived;
+        //    _replyConsumer = null;
+        //    _replyQueueName = null;
+        //}
 
-        _replyConsumerChannel?.Dispose();
-        _connection?.Dispose();
+        //_replyConsumerChannel?.Dispose();
+        //_connection?.Dispose();
 
-        _replyConsumerChannel = null;
-        _connection = null;
+        //_replyConsumerChannel = null;
+        //_connection = null;
 
         return Task.CompletedTask;
     }
 
-    private EventingBasicConsumer RegisterConsumerToQueue(string key)
-    {
-        if (_connection == null || _replyConsumerChannel == null)
-        {
-            throw new InvalidCastException("Bus not started");
-        }
+    //private EventingBasicConsumer RegisterConsumerToQueue(string key)
+    //{
+    //    if (_connectionManager == null)
+    //    {
+    //        throw new InvalidCastException("Bus not started");
+    //    }
 
-        if (_consumers.Contains(key))
-        {
-            throw new InvalidOperationException($"Consumer with key '{key}' already registered");
-        }
+    //    if (_consumers.Contains(key))
+    //    {
+    //        throw new InvalidOperationException($"Consumer with key '{key}' already registered");
+    //    }
 
-        try
-        {
-            _logger.LogDebug("Registering consumer queue '{ConsumerKey}'", key);
+    //    try
+    //    {
+    //        _logger.LogDebug("Registering consumer queue '{ConsumerKey}'", key);
             
-            _replyConsumerChannel.QueueDeclare(
-                queue: _options.ApplicationId == null ? key : $"{_options.ApplicationId}_{key}",
-                durable: false,
-                exclusive: false,
-                autoDelete: false, 
-                arguments: _queueProperties);
+    //        _replyConsumerChannel.QueueDeclare(
+    //            queue: _options.ApplicationId == null ? key : $"{_options.ApplicationId}_{key}",
+    //            durable: false,
+    //            exclusive: false,
+    //            autoDelete: false, 
+    //            arguments: _queueProperties);
 
-        }
-        catch (OperationInterruptedException ex)
-        {
-            throw new InvalidOperationException($"Unable to create queue '{key}': if any options property (like QueueExpiration or DefaultTimeToLive) is changed ensure that queue wasn't already created with a different value for that properties.", ex);
-        }
+    //    }
+    //    catch (OperationInterruptedException ex)
+    //    {
+    //        throw new InvalidOperationException($"Unable to create queue '{key}': if any options property (like QueueExpiration or DefaultTimeToLive) is changed ensure that queue wasn't already created with a different value for that properties.", ex);
+    //    }
 
-        var consumer = new EventingBasicConsumer(_replyConsumerChannel);
+    //    var consumer = new EventingBasicConsumer(_replyConsumerChannel);
 
-        _replyConsumerChannel.BasicConsume(
-            queue: _options.ApplicationId == null ? key : $"{_options.ApplicationId}_{key}", 
-            consumer: consumer,
-            autoAck: true);
+    //    _replyConsumerChannel.BasicConsume(
+    //        queue: _options.ApplicationId == null ? key : $"{_options.ApplicationId}_{key}", 
+    //        consumer: consumer,
+    //        autoAck: true);
 
-        _consumers.Add(key);
+    //    _consumers.Add(key);
 
-        return consumer;
-    }
+    //    return consumer;
+    //}
 
-    private EventingBasicConsumer RegisterConsumerToExchange(string key)
-    {
-        if (_connection == null || _replyConsumerChannel == null)
-        {
-            throw new InvalidCastException("Bus not started");
-        }
+    //private EventingBasicConsumer RegisterConsumerToExchange(string key)
+    //{
+    //    if (_connection == null || _replyConsumerChannel == null)
+    //    {
+    //        throw new InvalidCastException("Bus not started");
+    //    }
 
-        if (_consumers.Contains(key))
-        {
-            throw new InvalidOperationException($"Consumer with key '{key}' already registered");
-        }
+    //    if (_consumers.Contains(key))
+    //    {
+    //        throw new InvalidOperationException($"Consumer with key '{key}' already registered");
+    //    }
 
-        _logger.LogDebug("Registering consumer exchange '{ConsumerKey}'", key);
+    //    _logger.LogDebug("Registering consumer exchange '{ConsumerKey}'", key);
         
-        _replyConsumerChannel.ExchangeDeclare(
-            exchange: _options.ApplicationId == null ? key : $"{_options.ApplicationId}_{key}", 
-            type: ExchangeType.Fanout);
+    //    _replyConsumerChannel.ExchangeDeclare(
+    //        exchange: _options.ApplicationId == null ? key : $"{_options.ApplicationId}_{key}", 
+    //        type: ExchangeType.Fanout);
 
-        string queueName;
-        try
-        {
-            queueName = _replyConsumerChannel.QueueDeclare(
-                arguments: _queueProperties).QueueName;
-        }
-        catch (OperationInterruptedException ex)
-        {
-            throw new InvalidOperationException($"Unable to create queue '{key}': if any options property (like QueueExpiration or DefaultTimeToLive) is changed ensure that queue wasn't already created with a different value for that properties.", ex);
-        }
+    //    string queueName;
+    //    try
+    //    {
+    //        queueName = _replyConsumerChannel.QueueDeclare(
+    //            arguments: _queueProperties).QueueName;
+    //    }
+    //    catch (OperationInterruptedException ex)
+    //    {
+    //        throw new InvalidOperationException($"Unable to create queue '{key}': if any options property (like QueueExpiration or DefaultTimeToLive) is changed ensure that queue wasn't already created with a different value for that properties.", ex);
+    //    }
 
-        _replyConsumerChannel.QueueBind(queue: queueName,
-                            exchange: _options.ApplicationId == null ? key : $"{_options.ApplicationId}_{key}",
-                            routingKey: string.Empty);
+    //    _replyConsumerChannel.QueueBind(queue: queueName,
+    //                        exchange: _options.ApplicationId == null ? key : $"{_options.ApplicationId}_{key}",
+    //                        routingKey: string.Empty);
 
-        var consumer = new EventingBasicConsumer(_replyConsumerChannel);
+    //    var consumer = new EventingBasicConsumer(_replyConsumerChannel);
 
-        _replyConsumerChannel.BasicConsume(
-            queue: queueName,
-            consumer: consumer,
-            autoAck: true);
+    //    _replyConsumerChannel.BasicConsume(
+    //        queue: queueName,
+    //        consumer: consumer,
+    //        autoAck: true);
 
-        _consumers.Add(key);
+    //    _consumers.Add(key);
 
-        return consumer;
-    }
+    //    return consumer;
+    //}
 
     private async Task OnMessageReceivedFromClient(ReceivedCall receivedCall)
     {
@@ -395,7 +401,6 @@ internal class Bus : IBus
 
     private async Task OnMessageReceivedFromClientWithoutReply(ReceivedCall receivedCall)
     {
-        using var channelForReply = _channelPool.Get();
         var props = receivedCall.BasicProperties;
         try
         {
@@ -407,35 +412,32 @@ internal class Bus : IBus
         {
             _logger.LogError(ex, "Exception raised when calling handler for model '{ConsumerKey}' (CorrelationId:{CorrelationId})", receivedCall.HandlerConsumer.Key, props.CorrelationId);
 
-            HandleException(channelForReply.Value, receivedCall.BasicProperties, ex);
+            HandleExceptionInCallingInternalConsumer(receivedCall.BasicProperties, ex);
         }
 
-        if (_connection == null)
+        if (_connectionManager == null)
         {
             return;
         }
 
         if (props.ReplyTo != null && props.CorrelationId != null)
         {
-            var replyProps = channelForReply.Value.CreateBasicProperties();
+            using var channelForReply = _connectionManager.GetChannel();
+            var replyProps = channelForReply.CreateBasicProperties();
             replyProps.CorrelationId = props.CorrelationId;
             
             _logger.LogDebug("Reply to message '{ConsumerKey}' (CorrelationId:{CorrelationId})", receivedCall.HandlerConsumer.Key, props.CorrelationId);
 
-            channelForReply.Value.BasicPublish(
+            channelForReply.BasicPublish(
                 exchange: string.Empty,
                 routingKey: props.ReplyTo,
                 basicProperties: replyProps,
                 body: Array.Empty<byte>());
         }
-
-        //channelForReply.Value.BasicAck(deliveryTag: receivedCall.DeliveryTag, multiple: false);
     }
 
     private async Task OnMessageReceivedFromClientThatRequireReply(ReceivedCall receivedCall)
     {
-        using var channelForReply = _channelPool.Get();
-
         var props = receivedCall.BasicProperties;
         try
         {
@@ -443,22 +445,20 @@ internal class Bus : IBus
 
             var reply = await ((IHandlerConsumerWithReply)receivedCall.HandlerConsumer).OnHandle(receivedCall.Message);
 
-            if (_connection == null || _replyConsumerChannel == null)
+            if (_connectionManager == null)
             {
                 return;
             }
 
-            if (reply == null)
-            {
-                reply = Array.Empty<byte>();
-            }
+            reply ??= Array.Empty<byte>();
 
-            var replyProps = channelForReply.Value.CreateBasicProperties();
+            using var channelForReply = _connectionManager.GetChannel();
+            var replyProps = channelForReply.CreateBasicProperties();
             replyProps.CorrelationId = props.CorrelationId;
 
             _logger.LogDebug("Reply to message '{ConsumerKey}' (CorrelationId:{CorrelationId})", receivedCall.HandlerConsumer.Key, props.CorrelationId);
             
-            channelForReply.Value.BasicPublish(
+            channelForReply.BasicPublish(
                 exchange: string.Empty,
                 routingKey: props.ReplyTo,
                 basicProperties: replyProps,
@@ -468,28 +468,20 @@ internal class Bus : IBus
         {
             _logger.LogError(ex, "Exception raised when calling handler for model '{ConsumerKey}' (CorrelationId:{CorrelationId})", receivedCall.HandlerConsumer.Key, props.CorrelationId);
 
-            HandleException(channelForReply.Value, receivedCall.BasicProperties, ex);
+            HandleExceptionInCallingInternalConsumer(receivedCall.BasicProperties, ex);
         }
-
-        //if (_connection == null || _replyConsumerChannel == null)
-        //{
-        //    return;
-        //}
-
-        //channelForReply.Value.BasicAck(
-        //    deliveryTag: receivedCall.DeliveryTag,
-        //    multiple: false);
     }
 
-    private void HandleException(IModel channelForReply, IBasicProperties props, MessageBoxCallException ex)
+    private void HandleExceptionInCallingInternalConsumer(IBasicProperties props, MessageBoxCallException ex)
     {
-        if (_connection == null || _replyConsumerChannel == null)
+        if (_connectionManager == null)
         {
             return;
         }
 
         if (props.ReplyTo != null && props.CorrelationId != null)
         {
+            using var channelForReply = _connectionManager.GetChannel();
             var replyProps = channelForReply.CreateBasicProperties();
             replyProps.CorrelationId = props.CorrelationId;
             replyProps.Headers = new Dictionary<string, object>
@@ -507,7 +499,7 @@ internal class Bus : IBus
 
     public void Publish(Message message)
     {
-        if (_connection == null || _replyConsumerChannel == null)
+        if (_connectionManager == null)
         {
             throw new InvalidCastException("Bus not started");
         }
@@ -530,11 +522,12 @@ internal class Bus : IBus
             _logger.LogError(ex, "Unable to serialize model value of type {ModelType}", message.Model.GetType());
             throw;
         }
+
         var key = message.Model.GetType().FullName ?? throw new InvalidOperationException();
 
-        using var channelForPublish = _channelPool.Get();
+        using var channelForPublish = _connectionManager.GetChannel();
 
-        channelForPublish.Value.BasicPublish(
+        channelForPublish.BasicPublish(
             exchange: _options.ApplicationId == null ? key : $"{_options.ApplicationId}_{key}",
             routingKey: string.Empty,
             body: modelSerialized);
@@ -542,7 +535,7 @@ internal class Bus : IBus
 
     public async Task Send<T>(Message message, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
     {
-        if (_connection == null || _replyConsumerChannel == null)
+        if (_connectionManager == null)
         {
             throw new InvalidCastException("Bus not started");
         }
@@ -601,7 +594,7 @@ internal class Bus : IBus
 
     public async Task<Message> SendAndGetReply<T, TReply>(Message message, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
     {
-        if (_connection == null || _replyConsumerChannel == null)
+        if (_connectionManager == null)
         {
             throw new InvalidCastException("Bus not started");
         }
