@@ -75,7 +75,7 @@ class ConnectionManager
         private readonly Func<IModel> _objectGenerator;
         private readonly Action _connectionFaultHandler;
         private bool _isFaulted;
-        
+
 
         public ChannelPool(Func<IModel> objectGenerator, Action connectionFaultHandler)
         {
@@ -133,7 +133,7 @@ class ConnectionManager
             _consumer.Received += Consumer_Received;
         }
 
-        private void Consumer_Received(object? sender, BasicDeliverEventArgs ea) 
+        private void Consumer_Received(object? sender, BasicDeliverEventArgs ea)
             => _receiveMessageCallback(_handlerConsumer, ea);
 
         public string Key { get; }
@@ -190,7 +190,17 @@ class ConnectionManager
             _queueProperties["x-message-ttl"] = (int)options.DefaultTimeToLive.Value.TotalMilliseconds;
         }
     }
-    public string ReplyQueueName => _replyQueueName ?? throw new InvalidOperationException();
+
+    public string ReplyQueueName
+    {
+        get
+        {
+            lock (this)
+            {
+                return _replyQueueName ?? throw new InvalidOperationException();
+            }
+        }
+    }
 
     private void OnReplyMessageReceived(object? sender, BasicDeliverEventArgs e)
         => _replyMessageReceivedCallback(sender, e);
@@ -276,7 +286,7 @@ class ConnectionManager
 
         return consumer;
     }
-    
+
     private void RegisterConsumer(IHandlerConsumer handlerConsumer)
     {
         EventingBasicConsumer consumer;
@@ -303,7 +313,6 @@ class ConnectionManager
         }
     }
 
-
     private void TryConnect()
     {
         var policy = Policy
@@ -325,38 +334,42 @@ class ConnectionManager
     private void Connect()
     {
         _logger.LogDebug("Connecting to RabbitMQ: {Uri}", _factory.Uri);
-        _connection = _factory.CreateConnection();
-        _connection.ConnectionShutdown += OnConnectionShutdown;
-        _replyConsumerChannel = _connection.CreateModel();
-        _replyConsumerChannel.ModelShutdown += OnReplyConsumerChannelShutdown;
-        _replyConsumerChannel.BasicQos(0, 1, false);
-
-        _replyQueueName = _replyConsumerChannel.QueueDeclare(arguments: _queueProperties).QueueName;
-        _replyConsumer = new EventingBasicConsumer(_replyConsumerChannel);
-
-        foreach (var handlerConsumer in _handlerConsumers)
+        lock (this)
         {
-            RegisterConsumer(handlerConsumer);
-        }
 
-        _replyConsumer.Received += OnReplyMessageReceived;
+            _connection = _factory.CreateConnection();
+            _connection.ConnectionShutdown += OnConnectionShutdown;
+            _replyConsumerChannel = _connection.CreateModel();
+            _replyConsumerChannel.ModelShutdown += OnReplyConsumerChannelShutdown;
+            _replyConsumerChannel.BasicQos(0, 1, false);
 
-        _replyConsumerChannel.BasicConsume(
-            queue: _replyQueueName,
-            consumer: _replyConsumer,
-            autoAck: true);
+            _replyQueueName = _replyConsumerChannel.QueueDeclare(arguments: _queueProperties).QueueName;
+            _replyConsumer = new EventingBasicConsumer(_replyConsumerChannel);
 
-        _channelPool = new ChannelPool(() =>
-        {
-            if (_connection == null)
+            foreach (var handlerConsumer in _handlerConsumers)
             {
-                throw new InvalidOperationException();
+                RegisterConsumer(handlerConsumer);
             }
 
-            var newChannel = _connection.CreateModel();
-            newChannel.BasicQos(0, 1, false);
-            return newChannel;
-        }, HandleConnectionFault);
+            _replyConsumer.Received += OnReplyMessageReceived;
+
+            _replyConsumerChannel.BasicConsume(
+                queue: _replyQueueName,
+                consumer: _replyConsumer,
+                autoAck: true);
+
+            _channelPool = new ChannelPool(() =>
+            {
+                if (_connection == null)
+                {
+                    throw new InvalidOperationException();
+                }
+
+                var newChannel = _connection.CreateModel();
+                newChannel.BasicQos(0, 1, false);
+                return newChannel;
+            }, HandleConnectionFault);
+        }
 
         _logger.LogDebug("Connected to RabbitMQ: {Uri}", _factory.Uri);
     }
@@ -375,40 +388,43 @@ class ConnectionManager
 
     private void Disconnect()
     {
-        if (_connection != null)
+        lock (this)
         {
-            _connection.ConnectionShutdown -= OnConnectionShutdown;
+            if (_connection != null)
+            {
+                _connection.ConnectionShutdown -= OnConnectionShutdown;
+            }
+
+            if (_replyConsumerChannel != null)
+            {
+                _replyConsumerChannel.ModelShutdown -= OnReplyConsumerChannelShutdown;
+            }
+
+            if (_replyConsumer != null)
+            {
+                _replyConsumer.Received -= OnReplyMessageReceived;
+                _replyConsumer = null;
+                _replyQueueName = null;
+            }
+
+            foreach (var consumerEntry in _consumers)
+            {
+                consumerEntry.Value.Disconnect();
+            }
+
+            _consumers.Clear();
+
+            if (_channelPool != null)
+            {
+                _channelPool.Disconnect();
+            }
+
+            _replyConsumerChannel?.Dispose();
+            _connection?.Dispose();
+
+            _replyConsumerChannel = null;
+            _connection = null;
         }
-
-        if (_replyConsumerChannel != null)
-        {
-            _replyConsumerChannel.ModelShutdown -= OnReplyConsumerChannelShutdown;
-        }
-
-        if (_replyConsumer != null)
-        {
-            _replyConsumer.Received -= OnReplyMessageReceived;
-            _replyConsumer = null;
-            _replyQueueName = null;
-        }
-
-        foreach (var consumerEntry in _consumers)
-        {
-            consumerEntry.Value.Disconnect();
-        }
-
-        _consumers.Clear();
-
-        if (_channelPool != null)
-        {
-            _channelPool.Disconnect();
-        }        
-
-        _replyConsumerChannel?.Dispose();
-        _connection?.Dispose();
-
-        _replyConsumerChannel = null;
-        _connection = null;    
     }
 
     internal void HandleConnectionFault()
@@ -422,25 +438,35 @@ class ConnectionManager
 
     public ChannelPool.ChannelPoolRent GetChannel()
     {
-        if (_channelPool == null || _channelPool.IsFaulted)
+        lock (this)
         {
-            throw new InvalidOperationException();
-        }
+            if (_channelPool == null || _channelPool.IsFaulted)
+            {
+                throw new InvalidOperationException();
+            }
 
-        return _channelPool.Get();
+            return _channelPool.Get();
+        }
     }
 
     public void Start()
     {
-        if (_connection != null)
+        lock (this)
         {
-            throw new InvalidOperationException();
-        }
+            if (_connection != null)
+            {
+                throw new InvalidOperationException();
+            }
 
-        TryConnect();
+            TryConnect();
+        }
     }
 
-    public void Stop() => Disconnect();
-
-
+    public void Stop()
+    {
+        lock (this)
+        {
+            Disconnect();
+        }
+    }
 }
