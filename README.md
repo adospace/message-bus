@@ -16,7 +16,7 @@ Currently it supports RabbitMQ as message broker and System.Text.Json as seriali
 dotnet add package Message-Bus
 ```
 
-## Pulish/Subscribe
+## Publish/Subscribe
 
 ```csharp
 public record SampleModel();
