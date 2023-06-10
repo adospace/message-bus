@@ -410,7 +410,7 @@ internal class Bus : IBus
         }
         catch (MessageBoxCallException ex)
         {
-            _logger.LogError(ex, "Exception raised when calling handler for model '{ConsumerKey}' (CorrelationId:{CorrelationId})", receivedCall.HandlerConsumer.Key, props.CorrelationId);
+            _logger.LogError(ex, "Exception raised when calling handler for model '{ConsumerKey}' (CorrelationId:{CorrelationId}) ({Message})", receivedCall.HandlerConsumer.Key, props.CorrelationId, receivedCall.Message);
 
             HandleExceptionInCallingInternalConsumer(receivedCall.BasicProperties, ex);
         }
@@ -466,7 +466,7 @@ internal class Bus : IBus
         }
         catch (MessageBoxCallException ex)
         {
-            _logger.LogError(ex, "Exception raised when calling handler for model '{ConsumerKey}' (CorrelationId:{CorrelationId})", receivedCall.HandlerConsumer.Key, props.CorrelationId);
+            _logger.LogError(ex, "Exception raised when calling handler for model '{ConsumerKey}' (CorrelationId:{CorrelationId}) ({Message})", receivedCall.HandlerConsumer.Key, props.CorrelationId, receivedCall.Message);
 
             HandleExceptionInCallingInternalConsumer(receivedCall.BasicProperties, ex);
         }
